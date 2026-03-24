@@ -8,6 +8,7 @@ class DataInterfaceBase : public DataInterface {
 	int bitRate = 0;
 	int samplesPerBit = 0;
 	int hysterisis = 0;
+	int debug = false;
 
     public:
 	DataInterfaceBase(AudioPtr audio, int bitRate, int hysterisis) :
@@ -22,20 +23,26 @@ class DataInterfaceBase : public DataInterface {
 	// Return the tape index and first non-0xe6 byte. This is slow, so
 	// make sure to find the carrier before calling this.
 	std::pair<TapeIndex, uint8_t> FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) {
-		int rewindIndex = tapeIndex;
 		std::pair<TapeIndex, uint8_t> readResult;
 
 		// This loop will either throw a TapeEOF, or it
 		// will find "leaderByteCount" 0xe6 bytes in a row.
 		for(int i = 0; i < leaderByteCount ; i++) {
 			readResult = ReadByte(tapeIndex);
-			std::cout << std::format("{}: got byte {:02x} that ends at {}", tapeIndex, readResult.second, readResult.first) << std::endl;
-			if (readResult.second != 0xe6) {
-				tapeIndex = rewindIndex + samplesPerBit/4;
-				rewindIndex = tapeIndex;
 
-				// clear polyphase bit state:
-				Rewind();
+			if (debug) {
+				std::cout << std::format("{}-{}: got byte {:02x}", tapeIndex, readResult.first, readResult.second) << std::endl;
+			}
+
+			if (readResult.second != 0xe6) {
+				if (tapeIndex == Rewind()) {
+					// Prevent a rewind back to where we are (this
+					// happens when signals are very low).
+					tapeIndex = audio->FindThisOrNextZeroCrossing(tapeIndex + 1, hysterisis);
+				} else {
+					// this respects bit boundaries
+					tapeIndex = Rewind();
+				}
 				i = -1;
 				continue;
 			}

@@ -21,9 +21,10 @@ int main(int argc, char **argv)
 	bool invert = false;
 	int hysterisis = 200;
 	bool useKansasCity = false;
+	int dcOffset = 0;
 
 	int opt;
-	while ((opt = getopt(argc, argv, "b:dh:i:kp")) != -1) {
+	while ((opt = getopt(argc, argv, "b:dh:i:kpO:")) != -1) {
 		switch(opt) {
 			case 'b':
 				bitRate = std::stoi(optarg);
@@ -48,10 +49,14 @@ int main(int argc, char **argv)
 				break;
 			case 'k':
 				useKansasCity = true;
+				hysterisis = 0;
 				bitRate = 300;
 				break;
 			case 'p':
 				invert = true;
+				break;
+			case 'O':
+				dcOffset = std::stoi(optarg);
 				break;
 			default:
 				usage(argc, argv);
@@ -71,6 +76,7 @@ int main(int argc, char **argv)
 	}
 
 	audio->SetInvertPhase(invert);
+	audio->SetDCOffset(dcOffset);
 
 	DataInterfacePtr decoder;
 	if (useKansasCity) {
@@ -116,11 +122,22 @@ int main(int argc, char **argv)
 		auto leaderResult = decoder->FindEndOfNextLeader(carrierResult.second, 10);
 #endif
 		try {
+#if 0
+			KansasCity decoder(audio, bitRate, 0);
+			for (auto i = tapeIndex; i < tapeIndex + 147 * 1024 ; ) {
+				auto result = decoder.ReadByte(i);
+				std::cout << std::format("index {}/{} ({} samples): bit: {}", i, result.first, result.first - i, result.second) << std::endl;
+				i = result.first;
+			}
+			exit(0);
+#else
 			auto leaderResult = decoder->FindEndOfNextLeader(tapeIndex, 10);
 			RecordPtr record = std::make_shared<Record>();
 			tapeIndex = record->Read(decoder, leaderResult);
 			record->Dump(true);
+#endif
 		} catch (const AudioEOF &e) {
+			std::cout << "Reach EOF" << std::endl;
 			break;
 		}
 	}

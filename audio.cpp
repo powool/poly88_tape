@@ -88,8 +88,8 @@ int Audio::Negative(int index) {
 }
 
 int16_t Audio::Value(int index) {
-	if(invertPhase) return -wavData[index];
-	else return wavData[index];
+	if(invertPhase) return -wavData[index] - dcOffset;
+	else return wavData[index] + dcOffset;
 }
 
 int Audio::SampleRate() { return samplesPerSecond; }
@@ -107,12 +107,17 @@ double Audio::TimeOffset(int index) {
 int Audio::FindThisOrNextZeroCrossing(int index, int hysterisis) {
 
 	// skip to next negative to positive signal transition
-	while (index < SampleCount() - 1) {
-		if (Value(index) - hysterisis < 0 && Value(index + 1) - hysterisis >= 0) {
+	while (index < SampleCount()) {
+		if ((Value(index) - hysterisis < 0) && (Value(index + 1) - hysterisis >= 0)) {
 			break;
 		}
 		index++;
 	}
+
+	if(index >= SampleCount()) {
+		throw AudioEOF("ran out of data");
+	}
+
 	return index;
 }
 
@@ -120,12 +125,17 @@ int Audio::FindThisOrNextZeroCrossing(int index, int hysterisis) {
 int Audio::FindThisOrNextNegativeZeroCrossing(int index, int hysterisis) {
 
 	// skip to next negative to positive signal transition
-	while (index < SampleCount() - 1) {
-		if (Value(index) + hysterisis >= 0 && Value(index + 1) + hysterisis < 0) {
+	while (index < SampleCount()) {
+		if ((Value(index) + hysterisis >= 0) && (Value(index + 1) + hysterisis < 0)) {
 			break;
 		}
 		index++;
 	}
+
+	if(index >= SampleCount()) {
+		throw AudioEOF("ran out of data");
+	}
+
 	return index;
 }
 
@@ -136,11 +146,11 @@ int Audio::FindNearestZeroCrossing(int index, int bitRate, int hysterisis) {
 	
 	// find nearest negative to positive signal transition
 	for (int distance = 0; distance < SamplesPerBit(bitRate); distance++) {
-		if (Value(index + distance) - hysterisis < 0 && Value(index + distance + 1) - hysterisis >= 0) {
+		if ((Value(index + distance) - hysterisis < 0) && (Value(index + distance + 1) - hysterisis >= 0)) {
 			index += distance;
 			break;
 		}
-		if (Value(index - distance) - hysterisis < 0 && Value(index - distance + 1) - hysterisis >= 0) {
+		if ((Value(index - distance) - hysterisis < 0) && (Value(index - distance + 1) - hysterisis >= 0)) {
 			index -= distance;
 			break;
 		}
@@ -154,15 +164,15 @@ int Audio::FindThisOrNextTransition(int index, int hysterisis) {
 	// Skip to next negative to positive signal transition.
 	// Caller needs to verify if this is a local transition or not
 	while (index < SampleCount()) {
-		if ((Value(index) - hysterisis < 0 && Value(index + 1) - hysterisis >= 0) ||
-				(Value(index) + hysterisis >=0 && Value(index + 1) + hysterisis < 0)) {
+		if (((Value(index) - hysterisis < 0) && (Value(index + 1) - hysterisis >= 0)) ||
+				((Value(index) + hysterisis >=0) && (Value(index + 1) + hysterisis < 0))) {
 			break;
 		}
 		index++;
 	}
 
 	if(index >= SampleCount()) {
-			throw AudioEOF("ran out of data");
+		throw AudioEOF("ran out of data");
 	}
 
 	return index;
@@ -175,7 +185,7 @@ int Audio::FindThisOrNextTransition(int index, int hysterisis) {
 //                                   30 40 50 50 50 40 30
 bool Audio::IsAPeak(int index) {
 	if (index < 0 || index > sampleCount - 1) return false;
-	return !Negative(index) && Value(index - 1) <= Value(index) && Value(index) >= Value(index+1);
+	return !Negative(index) && (Value(index - 1) <= Value(index)) && (Value(index) >= Value(index+1));
 }
 
 void Audio::Dump(std::ostream &stream, int index, int count) {

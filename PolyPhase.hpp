@@ -3,6 +3,7 @@
 #include "DataInterfaceBase.hpp"
 
 class PolyPhase : public DataInterfaceBase {
+	TapeIndex rewindIndex;
 	int lastBit = 0;
 
 	// See http://www.kazojc.com/elementy_czynne/IC/8T20.pdf
@@ -55,6 +56,9 @@ class PolyPhase : public DataInterfaceBase {
 
 		for(auto i = 0 ; i < 8; i++) {
 			result = ReadBit(tapeIndex);
+			if (i == 1) {
+				rewindIndex = result.first;
+			}
 			if (result.second) {
 				resultByte |= (1 << i);
 			}
@@ -64,8 +68,9 @@ class PolyPhase : public DataInterfaceBase {
 		return result;
 	}
 
-	void Rewind() {
+	TapeIndex Rewind() {
 		lastBit = 0;
+		return rewindIndex;
 	}
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.

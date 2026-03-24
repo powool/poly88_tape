@@ -18,7 +18,7 @@ class DataInterface {
 	// signal transition.
 	virtual std::pair<TapeIndex, uint8_t> ReadByte(TapeIndex index) = 0;
 
-	virtual void Rewind() = 0;
+	virtual TapeIndex Rewind() = 0;
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.
 	virtual void TweakSettings()  = 0;

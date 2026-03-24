@@ -57,9 +57,11 @@ class Audio {
 	int sampleCount;
 	int samplesPerSecond;
 	bool invertPhase;
+	int dcOffset = 0;
 public:
 	Audio(const std::string &fileName);
 	void SetInvertPhase(bool invertPhase);
+	void SetDCOffset(int dcOffset) { this->dcOffset = dcOffset; }
 
 	int Negative(int index);
 

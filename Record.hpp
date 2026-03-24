@@ -95,8 +95,13 @@ class Record {
 					characters.clear();
 				}
 			}
-			for (/* */ ; (i+1) % 16 != 0; i++) {
+			while(true) {
+				if ((i+1) % 16 == 0) break;
+				if ((i+1) % 8 == 0) {
+					std::cout << " ";
+				}
 				std::cout << "   ";
+				i++;
 			}
 			if (characters.size()) {
 				std::cout << " " << characters;
