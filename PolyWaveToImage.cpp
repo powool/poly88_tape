@@ -380,23 +380,26 @@ class Record {
 
 	// Find which TapeByte (field name) a sample index corresponds to
 	std::string FieldNameAtIndex(TapeIndex idx) {
+		auto fmt = [](const std::string &label, const TapeByte &b ) {
+			return std::format("{}:{:02x}  {}/{}", label, *(b.value), b.startIndex, b.length);
+		};
 		for (auto &b : leader)
 			if (idx >= b.startIndex && idx < b.startIndex + b.length) return "leader";
-		if (soh.length > 0 && idx >= soh.startIndex && idx < soh.startIndex + soh.length) return std::format("soh:{:02x}", *(soh.value));
+		if (soh.length > 0 && idx >= soh.startIndex && idx < soh.startIndex + soh.length) return fmt("soh", soh);
 		for (int i = 0; i < 8; i++)
 			if (name[i].length > 0 && idx >= name[i].startIndex && idx < name[i].startIndex + name[i].length)
-				return std::format("name[{}]:{:02x}", i, *(name[i].value));
-		if (rcdL.length > 0 && idx >= rcdL.startIndex && idx < rcdL.startIndex + rcdL.length) return std::format("rcdL:{:02x}", *(rcdL.value));
-		if (rcdH.length > 0 && idx >= rcdH.startIndex && idx < rcdH.startIndex + rcdH.length) return std::format("rcdH:{:02x}", *(rcdH.value));
-		if (ln.length > 0 && idx >= ln.startIndex && idx < ln.startIndex + ln.length) return std::format("ln:{:02x}", *(ln.value));
-		if (addrL.length > 0 && idx >= addrL.startIndex && idx < addrL.startIndex + addrL.length) return std::format("addrL:{:02x}", *(addrL.value));
-		if (addrH.length > 0 && idx >= addrH.startIndex && idx < addrH.startIndex + addrH.length) return std::format("addrH:{:02x}", *(addrH.value));
-		if (type.length > 0 && idx >= type.startIndex && idx < type.startIndex + type.length) return std::format("type:{:02x}", *(type.value));
-		if (csHeader.length > 0 && idx >= csHeader.startIndex && idx < csHeader.startIndex + csHeader.length) return std::format("csHeader:{:02x}", *(csHeader.value));
+				return fmt(std::format("name[{}]", i), name[i]);
+		if (rcdL.length > 0 && idx >= rcdL.startIndex && idx < rcdL.startIndex + rcdL.length) return fmt("rcdL", rcdL);
+		if (rcdH.length > 0 && idx >= rcdH.startIndex && idx < rcdH.startIndex + rcdH.length) return fmt("rcdH", rcdH);
+		if (ln.length > 0 && idx >= ln.startIndex && idx < ln.startIndex + ln.length) return fmt("ln", ln);
+		if (addrL.length > 0 && idx >= addrL.startIndex && idx < addrL.startIndex + addrL.length) return fmt("addrL", addrL);
+		if (addrH.length > 0 && idx >= addrH.startIndex && idx < addrH.startIndex + addrH.length) return fmt("addrH", addrH);
+		if (type.length > 0 && idx >= type.startIndex && idx < type.startIndex + type.length) return fmt("type", type);
+		if (csHeader.length > 0 && idx >= csHeader.startIndex && idx < csHeader.startIndex + csHeader.length) return fmt("csHeader", csHeader);
 		for (size_t i = 0; i < data.size(); i++)
 			if (data[i].length > 0 && idx >= data[i].startIndex && idx < data[i].startIndex + data[i].length)
-				return std::format("data[{}]:{:02x}", i, *(data[i].value));
-		if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return std::format("csData:{:02x}", *(csData.value));
+				return fmt(std::format("data[{}]", i), data[i]);
+		if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return fmt("csData", csData);
 		return "";
 	}
 
@@ -916,7 +919,8 @@ protected:
 						? colorForFieldType(tb->fieldType)
 						: QColor(255, 0, 0);
 					color.setAlpha(120);
-					p.setPen(color);
+					QPen pen(color, 2);
+					p.setPen(pen);
 
 					// Skip the first bit (its boundary = the byte boundary already drawn)
 					for (size_t b = 1; b < tb->bits.size(); b++) {
@@ -1745,6 +1749,7 @@ private slots:
 
 		int row = 0;
 		for (auto &file : tape.GetFiles()) {
+			int lastRecordNumber = -1;
 			for (auto &record : file.GetRecords()) {
 				recordTable->insertRow(row);
 
@@ -1754,7 +1759,13 @@ private slots:
 					recordTable->setItem(row, col, item);
 				};
 
-				setItem(0, QString::fromStdString(record.GetName()));
+				std::string recordName;
+				if (record.GetRecordNumber() != lastRecordNumber + 1) {
+					recordName = "*";
+				}
+				lastRecordNumber = record.GetRecordNumber();
+				recordName += record.GetName();
+				setItem(0, QString::fromStdString(recordName));
 				setItem(1, QString::number(record.GetRecordNumber()));
 				setItem(2, QString::fromStdString(record.GetTypeName()));
 				setItem(3, QString("0x%1").arg(record.GetAddress(), 4, 16, QChar('0')));
