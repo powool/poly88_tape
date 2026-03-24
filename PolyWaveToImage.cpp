@@ -1338,15 +1338,33 @@ private slots:
 			}
 		}
 
-		// Insert the record into the tape, grouped by file name
+		// Insert the record into the tape, grouped by file name.
+		// A tape may have multiple File objects with the same name
+		// (duplicate copies), so find the best-fit File by tape position.
 		std::string recName = record.GetName();
+		uint16_t recNum = record.GetRecordNumber();
+		bool hdrOk = record.HeaderChecksumIsValid();
 		File *targetFile = nullptr;
 		for (auto &file : tape->GetFiles()) {
-			if (file.GetRecords().size() &&
-				file.GetRecords()[0].GetName() == recName) {
-				targetFile = &file;
-				break;
+			auto &recs = file.GetRecords();
+			if (recs.empty() || recs[0].GetName() != recName) continue;
+
+			// Check if this record would naturally follow the last
+			// record in this file (by tape position)
+			auto &lastRec = recs.back();
+			if (sohIdx > lastRec.GetSOHIndex()) {
+				// Would append after the last record — but check for
+				// record number reset/decrease indicating a new copy
+				if (hdrOk && recNum == 0 && lastRec.GetRecordNumber() > 0) {
+					continue; // skip, needs a new File
+				}
+				if (hdrOk && lastRec.HeaderChecksumIsValid() &&
+					recNum < lastRec.GetRecordNumber()) {
+					continue; // skip, needs a new File
+				}
 			}
+			targetFile = &file;
+			break;
 		}
 		if (!targetFile) {
 			tape->GetFiles().emplace_back();
@@ -1399,6 +1417,8 @@ private slots:
 		}
 
 		int recordCount = 0;
+		int lastRecNum = -1;
+		bool lastHdrOk = false;
 		while (idx < audio->SampleCount()) {
 			Record record;
 			if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
@@ -1411,11 +1431,30 @@ private slots:
 			recordCount++;
 			std::string recName = record.GetName();
 			uint16_t recNum = record.GetRecordNumber();
+			bool hdrOk = record.HeaderChecksumIsValid();
+
+			bool startNewFile = false;
 			if (!currentFile || recName != currentFileName) {
+				startNewFile = true;
+			} else if (recName == currentFileName && hdrOk) {
+				// Same name but record number reset to 0
+				if (recNum == 0 && lastRecNum >= 0) {
+					startNewFile = true;
+				}
+				// Same name but record number decreased and both checksums ok
+				else if (lastRecNum >= 0 && recNum < lastRecNum && lastHdrOk) {
+					startNewFile = true;
+				}
+			}
+
+			if (startNewFile) {
 				files.emplace_back();
 				currentFile = &files.back();
 				currentFileName = recName;
 			}
+
+			lastRecNum = recNum;
+			lastHdrOk = hdrOk;
 			currentFile->GetRecords().push_back(std::move(record));
 
 			emit statusMessage(QString("Scanning: %1 record %2 (%3 found)")
@@ -2548,6 +2587,8 @@ private slots:
 		int errorCount = 0;
 		std::string currentFileName;
 		File *currentFile = nullptr;
+		int lastRecNum = -1;
+		bool lastHdrOk = false;
 
 		while (idx < audioPtr->SampleCount()) {
 			Record record;
@@ -2565,13 +2606,31 @@ private slots:
 
 			recordCount++;
 
-			// Group records into Files by name continuity
+			// Group records into Files by name continuity,
+			// starting a new File when record number resets/decreases
 			std::string recName = record.GetName();
+			uint16_t recNum = record.GetRecordNumber();
+			bool hdrOk = record.HeaderChecksumIsValid();
+
+			bool startNewFile = false;
 			if (!currentFile || recName != currentFileName) {
+				startNewFile = true;
+			} else if (recName == currentFileName && hdrOk) {
+				if (recNum == 0 && lastRecNum >= 0) {
+					startNewFile = true;
+				} else if (lastRecNum >= 0 && recNum < lastRecNum && lastHdrOk) {
+					startNewFile = true;
+				}
+			}
+
+			if (startNewFile) {
 				tape.GetFiles().emplace_back();
 				currentFile = &tape.GetFiles().back();
 				currentFileName = recName;
 			}
+
+			lastRecNum = recNum;
+			lastHdrOk = hdrOk;
 			currentFile->GetRecords().push_back(std::move(record));
 
 			if (status != ScanStatus::Ok) {
@@ -2581,7 +2640,7 @@ private slots:
 			statusBar()->showMessage(
 				QString("Scanning: %1 record %2 (%3 found, %4 errors)")
 				.arg(QString::fromStdString(recName).trimmed())
-				.arg(record.GetRecordNumber())
+				.arg(recNum)
 				.arg(recordCount).arg(errorCount));
 			QApplication::processEvents();
 
