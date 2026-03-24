@@ -14,7 +14,7 @@ void usage(int argc, char **argv)
 int main(int argc, char **argv)
 {
 	int bitRate = 4800;
-	int debug = false;
+	int debug = 0;
 	TapeIndex tapeIndex = 0;
 	bool tapeIndexInSeconds = false;
 	std::string arg;
@@ -30,7 +30,7 @@ int main(int argc, char **argv)
 				bitRate = std::stoi(optarg);
 				break;
 			case 'd':
-				debug = true;
+				debug++;
 				break;
 			case 'h':
 				hysterisis = std::stoi(optarg);
@@ -80,7 +80,16 @@ int main(int argc, char **argv)
 
 	DataInterfacePtr decoder;
 	if (useKansasCity) {
-		decoder = std::make_shared<KansasCity>(audio, bitRate, hysterisis);
+		auto kansasCity = std::make_shared<KansasCity>(audio, bitRate, hysterisis);
+		if (debug > 1) {
+			kansasCity->SetDebugBit(true);
+		}
+
+		if (debug > 0) {
+			kansasCity->SetDebugByte(true);
+		}
+
+		decoder = kansasCity;
 	} else {
 		decoder = std::make_shared<PolyPhase>(audio, bitRate, hysterisis);
 	}

@@ -75,8 +75,8 @@ class Record {
 		}
 		if (showAll || gotHeader) {
 			std::cout <<
-				std::format("Name: {} Record {} Type {}",
-				tapeHeader->GetName(), tapeHeader->rn(), std::to_string(tapeHeader->type)) <<
+				std::format("Name: {} Record {} Type {:1d} Addr {:04x}",
+				tapeHeader->GetName(), tapeHeader->rn(), tapeHeader->type, tapeHeader->addr()) <<
 				std::endl;
 		}
 		if (showAll || gotData) {

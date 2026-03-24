@@ -9,6 +9,8 @@ class KansasCity : public DataInterfaceBase {
 	bool debugByte = false;
 	bool debugBit = false;
 
+	void SetDebugByte(bool d) { debugByte = d; }
+	void SetDebugBit(bool d) { debugBit = d; }
 	// Decode 300 baud byte format data, which is a two tone encoding (AKA
 	// frequency shift key - FSK), where 1200HZ represents a 0, and 2400HZ
 	// represents a 1.
