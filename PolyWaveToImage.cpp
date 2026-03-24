@@ -1260,9 +1260,6 @@ private slots:
 		QAction *scanForRecordAction = contextMenu.addAction("Scan For Record");
 		QAction *scanAllFromHereAction = contextMenu.addAction("Scan All From Here");
 		QAction *scanForCarrierAction = contextMenu.addAction("Scan For Carrier");
-		contextMenu.addSeparator();
-		QAction *dataAction = contextMenu.addAction("Data");
-		QAction *waveformAction = contextMenu.addAction("Waveform");
 
 		connect(scanForRecordAction, &QAction::triggered, this,
 			[this, idx]() { ScanForRecord(idx); });
@@ -1270,10 +1267,6 @@ private slots:
 			[this, idx]() { ScanAllFromHere(idx); });
 		connect(scanForCarrierAction, &QAction::triggered, this,
 			[this, idx]() { ScanForCarrier(idx); });
-		connect(dataAction, &QAction::triggered, this,
-			[this, idx]() { onContextData(idx); });
-		connect(waveformAction, &QAction::triggered, this,
-			[this, idx]() { onContextWaveform(idx); });
 
 		contextMenu.exec(mapToGlobal(pos));
 	}
@@ -1481,14 +1474,6 @@ private slots:
 		}
 
 		setScrollOffset(idx);
-	}
-
-	void onContextData(TapeIndex idx) {
-		// placeholder - will be implemented later
-	}
-
-	void onContextWaveform(TapeIndex idx) {
-		// placeholder - will be implemented later
 	}
 
 private:
@@ -1828,6 +1813,20 @@ private:
 		splitter->setStretchFactor(0, 5);
 		splitter->setStretchFactor(1, 0);
 		splitter->setStretchFactor(2, 2);
+
+		// Style the splitter handles so they are visible and draggable
+		splitter->setHandleWidth(5);
+		splitter->setStyleSheet(
+			"QSplitter::handle:vertical {"
+			"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+			"    stop:0 #444, stop:0.5 #666, stop:1 #444);"
+			"  height: 5px;"
+			"}"
+			"QSplitter::handle:vertical:hover {"
+			"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+			"    stop:0 #555, stop:0.5 #888, stop:1 #555);"
+			"}"
+		);
 
 		mainLayout->addWidget(splitter);
 		setCentralWidget(centralWidget);
@@ -2255,8 +2254,10 @@ private slots:
 				}
 			}
 
-			// Check data length: all non-End, non-last records should be 256
-			if (r->GetTypeValue() != 0x02 && i < casRecords.size() - 1) {
+			// Check data length: data/binary records (not last) should be 256
+			uint8_t rtype = r->GetTypeValue();
+			bool lengthExempt = (rtype == 0x01 || rtype == 0x02 || rtype == 0x03);
+			if (!lengthExempt && i < casRecords.size() - 1) {
 				if (r->GetDataLength() != 256) {
 					warnings << QString("Record %1 has length %2, expected 256")
 						.arg(recNum).arg(r->GetDataLength());
@@ -2657,12 +2658,7 @@ private slots:
 	}
 
 	void onQuit() {
-		auto reply = QMessageBox::question(
-			this, "Quit", "Are you sure you want to quit?",
-			QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-		if (reply == QMessageBox::Yes) {
-			QApplication::quit();
-		}
+		close();
 	}
 
 	void onQuickHelp() {
@@ -2746,13 +2742,18 @@ Waveform context menu
 
 protected:
 	void closeEvent(QCloseEvent *event) override {
-		auto reply = QMessageBox::question(
-			this, "Quit", "Are you sure you want to quit?",
-			QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-		if (reply == QMessageBox::Yes) {
-			event->accept();
+		if (audioPtr && audioPtr->IsDirty()) {
+			auto reply = QMessageBox::question(
+				this, "Quit",
+				"The audio data has been modified. Are you sure you want to quit?",
+				QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+			if (reply == QMessageBox::Yes) {
+				event->accept();
+			} else {
+				event->ignore();
+			}
 		} else {
-			event->ignore();
+			event->accept();
 		}
 	}
 };
