@@ -84,8 +84,7 @@ class KansasCity : public DataInterfaceBase {
 #endif
 			return std::make_pair(audio->FindThisOrNextZeroCrossing(index), resultBit);
 		}
-		// NOT REACHED
-		return std::make_pair(0, 0);
+		throw AudioEOF("ran out of data");
 	}
 
     public:
