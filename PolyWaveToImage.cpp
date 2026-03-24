@@ -2,7 +2,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -252,6 +254,57 @@ class Record {
 			result += '|';
 		}
 		return result;
+	}
+
+	// Return the raw type byte value (or 0xff if unknown)
+	uint8_t GetTypeValue() const {
+		return type.value ? *(type.value) : 0xff;
+	}
+
+	// Return an ASCII representation of the header as a single line
+	std::string GetHeaderAsAscii() const {
+		std::string n;
+		for (int i = 0; i < 8; i++)
+			n += name[i].value ? static_cast<char>(*(name[i].value)) : '?';
+		uint16_t rn = 0;
+		if (rcdL.value && rcdH.value)
+			rn = static_cast<uint16_t>(*(rcdL.value)) |
+			     (static_cast<uint16_t>(*(rcdH.value)) << 8);
+		uint16_t length = 0;
+		if (ln.value) length = *(ln.value) == 0 ? 256 : *(ln.value);
+		uint16_t address = 0;
+		if (addrL.value && addrH.value)
+			address = static_cast<uint16_t>(*(addrL.value)) |
+			          (static_cast<uint16_t>(*(addrH.value)) << 8);
+		std::string typeName = "?";
+		if (type.value) {
+			switch (*(type.value)) {
+				case AbsoluteBinary: typeName = "Binary"; break;
+				case Comment:        typeName = "Comment"; break;
+				case End:            typeName = "End"; break;
+				case AutoExecute:    typeName = "AutoExec"; break;
+				case Data:           typeName = "Data"; break;
+				default:             typeName = "Unknown"; break;
+			}
+		}
+		return std::format("Name: {} Record: {} Type: {} Addr: {:04x} Length: {}",
+			n, rn, typeName, address, length);
+	}
+
+	// Return a reference to the data vector for direct access
+	const std::vector<TapeByte> &GetData() const { return data; }
+
+	// Check if record type has data content (Binary, Data, or Comment)
+	bool HasDataContent() const {
+		if (!type.value) return false;
+		switch (*(type.value)) {
+			case AbsoluteBinary:
+			case Data:
+			case Comment:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	TapeIndex GetSOHIndex() const {
@@ -554,7 +607,6 @@ enum class TapeFormat {
 };
 
 struct MainWindowSettings {
-	bool booleanPlaceholder = false;
 	bool invertSignal = false;
 	uint32_t bitrate = 4800;
 	TapeFormat tapeFormat = TapeFormat::PolyPhase;
@@ -562,7 +614,7 @@ struct MainWindowSettings {
 	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
 	double curveDragRange = 0.25;
 	bool invertMouseWheelScroll = false;
-	bool autoRepairHeaderLength = false;
+	bool autoRepairHeaderLength = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -1590,6 +1642,9 @@ private:
 			"  border: 1px solid #333; padding: 2px; }"
 		);
 
+		recordTable->setContextMenuPolicy(Qt::CustomContextMenu);
+		connect(recordTable, &QWidget::customContextMenuRequested,
+			this, &MainWindow::onRecordTableContextMenu);
 		connect(recordTable, &QTableWidget::cellClicked,
 			this, &MainWindow::onRecordTableClicked);
 
@@ -1834,6 +1889,156 @@ private slots:
 				idx++;
 			}
 		}
+	}
+
+	void onRecordTableContextMenu(const QPoint &pos) {
+		QModelIndex index = recordTable->indexAt(pos);
+		if (!index.isValid()) return;
+		int row = index.row();
+
+		QMenu contextMenu(recordTable);
+		QAction *deleteAction = contextMenu.addAction("Delete");
+		QAction *saveAction = contextMenu.addAction("Save Tape File");
+
+		QAction *chosen = contextMenu.exec(recordTable->viewport()->mapToGlobal(pos));
+		if (chosen == deleteAction) {
+			deleteRecordAtRow(row);
+		} else if (chosen == saveAction) {
+			saveTapeFileFromRow(row);
+		}
+	}
+
+	void deleteRecordAtRow(int row) {
+		int idx = 0;
+		for (auto &file : tape.GetFiles()) {
+			auto &recs = file.GetRecords();
+			for (auto it = recs.begin(); it != recs.end(); ++it) {
+				if (idx == row) {
+					recs.erase(it);
+					// Remove empty files
+					auto &files = tape.GetFiles();
+					files.erase(
+						std::remove_if(files.begin(), files.end(),
+							[](File &f) { return f.GetRecords().empty(); }),
+						files.end());
+					waveformView->update();
+					refreshRecordTable();
+					return;
+				}
+				idx++;
+			}
+		}
+	}
+
+	// Find the file index and record index within that file for a given table row
+	bool findRecordByRow(int row, int &fileIdx, int &recIdx) {
+		int idx = 0;
+		fileIdx = 0;
+		for (auto &file : tape.GetFiles()) {
+			recIdx = 0;
+			for (auto &record : file.GetRecords()) {
+				if (idx == row) return true;
+				idx++;
+				recIdx++;
+			}
+			fileIdx++;
+		}
+		return false;
+	}
+
+	void saveTapeFileFromRow(int row) {
+		int fileIdx, recIdx;
+		if (!findRecordByRow(row, fileIdx, recIdx)) return;
+
+		// Pop up a directory selection dialog
+		QString dirPath = QFileDialog::getExistingDirectory(
+			this, "Select Output Directory", QString(),
+			QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+		if (dirPath.isEmpty()) return;
+
+		namespace fs = std::filesystem;
+		fs::path outDir(dirPath.toStdString());
+		if (!fs::exists(outDir)) {
+			fs::create_directories(outDir);
+		}
+
+		auto &files = tape.GetFiles();
+		auto &recs = files[fileIdx].GetRecords();
+		Record &firstRecord = recs[recIdx];
+		std::string tapeFileName = firstRecord.GetName();
+
+		// Trim trailing spaces from the tape file name
+		while (!tapeFileName.empty() && tapeFileName.back() == ' ')
+			tapeFileName.pop_back();
+
+		int writtenCount = 0;
+
+		for (size_t ri = recIdx; ri < recs.size(); ri++) {
+			Record &record = recs[ri];
+
+			// After the first record, check continuity
+			if (ri > static_cast<size_t>(recIdx)) {
+				std::string recName = record.GetName();
+				if (recName != firstRecord.GetName()) break;
+				if (record.GetRecordNumber() <= recs[ri - 1].GetRecordNumber()) break;
+			}
+
+			// Build the output filename: {tapeFileName}-{recordNumber}-{seq}
+			uint16_t recordNumber = record.GetRecordNumber();
+			int seq = 1;
+			fs::path outPath;
+			while (true) {
+				std::string fname = std::format("{}-{}-{}", tapeFileName, recordNumber, seq);
+				outPath = outDir / fname;
+				if (!fs::exists(outPath)) break;
+				seq++;
+			}
+
+			// Write the file
+			std::ofstream ofs(outPath, std::ios::binary);
+			if (!ofs) {
+				statusBar()->showMessage(
+					QString("Failed to create file: %1")
+					.arg(QString::fromStdString(outPath.string())));
+				return;
+			}
+
+			// Line 1: ASCII header
+			ofs << record.GetHeaderAsAscii() << "\n";
+
+			// Line 2: hex dump of data bytes (if record has data content)
+			if (record.HasDataContent()) {
+				auto &dataBytes = record.GetData();
+				for (size_t i = 0; i < dataBytes.size(); i++) {
+					if (dataBytes[i].value) {
+						char buf[4];
+						snprintf(buf, sizeof(buf), "%02X ", *(dataBytes[i].value));
+						ofs << buf;
+					} else {
+						ofs << "?? ";
+					}
+				}
+				ofs << "\n";
+
+				// Line 3+: raw binary data
+				for (size_t i = 0; i < dataBytes.size(); i++) {
+					if (dataBytes[i].value) {
+						uint8_t byte = *(dataBytes[i].value);
+						ofs.write(reinterpret_cast<const char *>(&byte), 1);
+					} else {
+						uint8_t zero = 0;
+						ofs.write(reinterpret_cast<const char *>(&zero), 1);
+					}
+				}
+			}
+
+			ofs.close();
+			writtenCount++;
+		}
+
+		statusBar()->showMessage(
+			QString("Saved %1 record(s) to %2")
+			.arg(writtenCount).arg(dirPath));
 	}
 
 	void onWaveformRecordClicked(double sampleIndex) {
