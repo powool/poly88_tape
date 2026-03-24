@@ -154,6 +154,62 @@ class Record {
 		}
 	}
 
+	uint8_t GetActualHeaderSum() const {
+		uint8_t sum = 0;
+		for (int i = 0; i < 8; i++)
+			if (name[i].value) sum += *(name[i].value);
+		if (rcdL.value) sum += *(rcdL.value);
+		if (rcdH.value) sum += *(rcdH.value);
+		if (ln.value) sum += *(ln.value);
+		if (addrL.value) sum += *(addrL.value);
+		if (addrH.value) sum += *(addrH.value);
+		if (type.value) sum += *(type.value);
+		if (csHeader.value) sum += *(csHeader.value);
+		return sum;
+	}
+
+	uint8_t GetActualDataSum() const {
+		uint8_t sum = 0;
+		for (size_t i = 0; i < data.size(); i++)
+			if (data[i].value) sum += *(data[i].value);
+		if (csData.value) sum += *(csData.value);
+		return sum;
+	}
+
+	// Generate a hex dump of the header bytes (name[8] + rcdL rcdH ln addrL addrH type + csHeader)
+	std::string GetHeaderHexDump() const {
+		std::string result;
+		std::string ascii;
+
+		// Collect all header TapeBytes in order
+		std::vector<const TapeByte *> hdrBytes;
+		for (auto &b : name) hdrBytes.push_back(&b);
+		hdrBytes.push_back(&rcdL);
+		hdrBytes.push_back(&rcdH);
+		hdrBytes.push_back(&ln);
+		hdrBytes.push_back(&addrL);
+		hdrBytes.push_back(&addrH);
+		hdrBytes.push_back(&type);
+		hdrBytes.push_back(&csHeader);
+
+		for (size_t i = 0; i < hdrBytes.size(); i++) {
+			if (hdrBytes[i]->value) {
+				char buf[4];
+				snprintf(buf, sizeof(buf), "%02x ", *(hdrBytes[i]->value));
+				result += buf;
+				uint8_t ch = *(hdrBytes[i]->value);
+				ascii += (ch >= 0x20 && ch <= 0x7e) ? static_cast<char>(ch) : '.';
+			} else {
+				result += "?? ";
+				ascii += '.';
+			}
+			if (i == 7) result += " ";  // gap after 8 name bytes
+		}
+
+		result += "    |" + ascii + "|";
+		return result;
+	}
+
 	// Generate a hex dump of the data bytes, 16 bytes per line with ASCII
 	std::string GetHexDump() const {
 		std::string result;
@@ -279,7 +335,7 @@ class Record {
 		for (int i = 0; i < 8; i++)
 			sum += *(name[i].value);
 		sum += *(rcdL.value);
-		sum += *(rcdL.value);
+		sum += *(rcdH.value);
 		sum += *(ln.value);
 		sum += *(addrL.value);
 		sum += *(addrH.value);
@@ -705,6 +761,7 @@ signals:
 	void tapeDataChanged();
 	void recordClicked(double sampleIndex);
 	void selectionChanged(const WaveformSelection &sel);
+	void statusMessage(const QString &msg);
 
 protected:
 	void paintEvent(QPaintEvent *) override {
@@ -1102,9 +1159,30 @@ private slots:
 		if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
 		auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
 
-		if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
-			std::cerr << "ScanForRecord: no record found from index " << idx << std::endl;
+		if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader ||
+			status == ScanStatus::NoSOH) {
+			emit statusMessage(QString("No new record found starting at %1")
+				.arg(static_cast<qint64>(idx)));
 			return;
+		}
+
+		TapeIndex sohIdx = record.GetSOHIndex();
+		TapeIndex endIdx = record.GetEndIndex();
+		qint64 width = static_cast<qint64>(endIdx - sohIdx);
+
+		// Check for duplicate: existing record with same SOH index
+		for (auto &file : tape->GetFiles()) {
+			for (auto &existing : file.GetRecords()) {
+				if (existing.GetSOHIndex() == sohIdx) {
+					emit statusMessage(QString(
+						"Duplicate record found at %1 (width %2) — "
+						"already exists in file %3")
+						.arg(static_cast<qint64>(sohIdx))
+						.arg(width)
+						.arg(QString::fromStdString(existing.GetName()).trimmed()));
+					return;
+				}
+			}
 		}
 
 		// Insert the record into the tape, grouped by file name
@@ -1121,13 +1199,21 @@ private slots:
 			tape->GetFiles().emplace_back();
 			targetFile = &tape->GetFiles().back();
 		}
-		TapeIndex recordStart = record.GetStartIndex();
-		targetFile->GetRecords().push_back(std::move(record));
+
+		// Insert in tape index order
+		auto &recs = targetFile->GetRecords();
+		auto it = std::lower_bound(recs.begin(), recs.end(), record,
+			[](const Record &a, const Record &b) {
+				return a.GetSOHIndex() < b.GetSOHIndex();
+			});
+		recs.insert(it, std::move(record));
 
 		// Scroll to the start of the record
-		setScrollOffset(recordStart > 0 ? recordStart : idx);
+		setScrollOffset(sohIdx > 0 ? sohIdx : idx);
 		update();
 		emit tapeDataChanged();
+		emit statusMessage(QString("New tape record found at %1 (width %2)")
+			.arg(static_cast<qint64>(sohIdx)).arg(width));
 	}
 
 	void ScanAllFromHere(TapeIndex idx) {
@@ -1414,6 +1500,8 @@ private:
 			this, &MainWindow::onWaveformRecordClicked);
 		connect(waveformView, &WaveformView::selectionChanged,
 			this, &MainWindow::onSelectionChanged);
+		connect(waveformView, &WaveformView::statusMessage,
+			this, [this](const QString &msg) { statusBar()->showMessage(msg); });
 
 		// --- Middle pane: two rows of status labels ---
 		auto *middleWidget = new QWidget(splitter);
@@ -1712,14 +1800,18 @@ private slots:
 	void showRecordDetail(Record &record) {
 		if (!hexDetailView) return;
 		QString detail;
-		detail += QString("<b>%1</b> Record %2  Type: %3  Addr: 0x%4  Len: %5  Status: %6<br><br>")
+		detail += QString("<b>%1</b> Record %2  Type: %3  Addr: 0x%4  Len: %5  Status: %6<br>")
 			.arg(QString::fromStdString(record.GetName()).trimmed())
 			.arg(record.GetRecordNumber())
 			.arg(QString::fromStdString(record.GetTypeName()))
 			.arg(record.GetAddress(), 4, 16, QChar('0'))
 			.arg(record.GetDataLength())
 			.arg(QString::fromStdString(record.GetStatusString()));
-		detail += "<pre>" + QString::fromStdString(record.GetHexDump()) + "</pre>";
+		detail += QString("  Header Sum: 0x%1  Data Sum: 0x%2<br>")
+			.arg(record.GetActualHeaderSum(), 2, 16, QChar('0'))
+			.arg(record.GetActualDataSum(), 2, 16, QChar('0'));
+		detail += "<pre>" + QString::fromStdString(record.GetHeaderHexDump()) + "\n\n";
+		detail += QString::fromStdString(record.GetHexDump()) + "</pre>";
 		hexDetailView->setHtml(detail);
 	}
 
