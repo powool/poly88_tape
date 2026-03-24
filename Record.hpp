@@ -16,6 +16,8 @@ class Record {
 	bool gotSOH = false;
 	bool gotHeader = false;
 	bool gotData = false;
+	uint8_t headerChecksum;
+	uint8_t dataChecksum;
     public:
 	Record() {;}
 	Record(std::string expectedName, uint16_t expectedRecordNumber) :
@@ -45,7 +47,8 @@ class Record {
 		}
 		readResult = dataInterface->ReadByte(tapeIndex);
 		tapeIndex = readResult.first;
-		headerSum += readResult.second;
+		headerChecksum = readResult.second;
+		headerSum += headerChecksum;
 		if(headerSum == 0x00) {
 			gotHeader = true;
 		}
@@ -62,7 +65,8 @@ class Record {
 		}
 		readResult = dataInterface->ReadByte(tapeIndex);
 		tapeIndex = readResult.first;
-		dataSum += readResult.second;
+		dataChecksum = readResult.second;
+		dataSum += dataChecksum;
 		if(dataSum == 0x00) {
 			gotData = true;
 		}
