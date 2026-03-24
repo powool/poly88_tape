@@ -69,7 +69,7 @@ class PolyPhase : public DataInterfaceBase {
 		for(auto i = 0 ; i < 8; i++) {
 			result = ReadBit(tapeIndex);
 			if (i == 1) {
-				rewindIndex = result.first;
+				rewindIndex = tapeIndex;
 			}
 			if (result.second) {
 				resultByte |= (1 << i);
@@ -89,7 +89,7 @@ class PolyPhase : public DataInterfaceBase {
 			TapeIndex bitStart = tapeIndex;
 			auto bit = ReadBit(tapeIndex);
 			if (i == 1) {
-				rewindIndex = bit.first;
+				rewindIndex = tapeIndex;
 			}
 			if (bit.second) {
 				resultByte |= (1 << i);
