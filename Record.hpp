@@ -19,6 +19,8 @@ class Record {
 	bool repairDataLength = false;
 	uint8_t headerChecksum;
 	uint8_t dataChecksum;
+	uint8_t actualHeaderSum = 0;
+	uint8_t actualDataSum = 0;
 
 	uint8_t header[sizeof(TapeHeader)];
 	uint8_t data[256];
@@ -40,18 +42,18 @@ class Record {
 		}
 
 		auto tapeIndex  = soh.nextIndex;
-		uint8_t headerSum = 0;
+		actualHeaderSum = 0;
 		for (int i = 0; i < sizeof(TapeHeader); i++) {
 			readResult = dataInterface->ReadByte(tapeIndex);
 			tapeIndex = readResult.first;
-			headerSum += readResult.second;
+			actualHeaderSum += readResult.second;
 			header[i] = readResult.second;
 		}
 		readResult = dataInterface->ReadByte(tapeIndex);
 		tapeIndex = readResult.first;
 		headerChecksum = readResult.second;
-		headerSum += headerChecksum;
-		if(headerSum == 0x00) {
+		actualHeaderSum += headerChecksum;
+		if(actualHeaderSum == 0x00) {
 			gotHeader = true;
 		}
 
@@ -64,18 +66,18 @@ class Record {
 		// good data.
 		auto dataLength = GetDataLength();
 
-		uint8_t dataSum = 0;
+		actualDataSum = 0;
 		for (int i = 0; i < dataLength; i++) {
 			auto readResult = dataInterface->ReadByte(tapeIndex);
 			tapeIndex = readResult.first;
-			dataSum += readResult.second;
+			actualDataSum += readResult.second;
 			data[i] = readResult.second;
 		}
 		readResult = dataInterface->ReadByte(tapeIndex);
 		tapeIndex = readResult.first;
 		dataChecksum = readResult.second;
-		dataSum += dataChecksum;
-		if(dataSum == 0x00) {
+		actualDataSum += dataChecksum;
+		if(actualDataSum == 0x00) {
 			gotData = true;
 		}
 		return tapeIndex;
@@ -94,6 +96,14 @@ class Record {
 			return 256;
 		}
 	};
+
+	uint8_t GetActualHeaderSum() {
+		return actualHeaderSum;
+	}
+
+	uint8_t GetActualDataSum() {
+		return actualDataSum;
+	}
 
 	void Dump(bool showAll = false) const {
 		TapeHeader *tapeHeader = static_cast<TapeHeader *>((void *) &header[0]);
