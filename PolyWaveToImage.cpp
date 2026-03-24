@@ -505,6 +505,7 @@ struct MainWindowSettings {
 	// Curve drag interpolation range, as a fraction of one bit-cell cycle.
 	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
 	double curveDragRange = 0.25;
+	bool invertMouseWheelScroll = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -546,6 +547,10 @@ public:
 		curveDragRangeSpin->setSuffix(" cycles");
 		layout->addRow("Curve Drag Range", curveDragRangeSpin);
 
+		invertMouseWheelScrollCheckBox = new QCheckBox(this);
+		invertMouseWheelScrollCheckBox->setChecked(settingsRef.invertMouseWheelScroll);
+		layout->addRow("Invert Mouse Wheel Scroll", invertMouseWheelScrollCheckBox);
+
 		auto *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 		layout->addRow(buttons);
@@ -560,6 +565,7 @@ public:
 		settingsRef.bitrate = static_cast<uint32_t>(bitrateSpin->value());
 		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
 		settingsRef.curveDragRange = curveDragRangeSpin->value();
+		settingsRef.invertMouseWheelScroll = invertMouseWheelScrollCheckBox->isChecked();
 		QDialog::accept();
 	}
 
@@ -570,6 +576,7 @@ private:
 	QSpinBox *bitrateSpin;
 	QComboBox *tapeFormatCombo;
 	QDoubleSpinBox *curveDragRangeSpin;
+	QCheckBox *invertMouseWheelScrollCheckBox;
 };
 
 // ---------------------------------------------------------------------------
@@ -928,12 +935,14 @@ protected:
 		double degrees = event->angleDelta().y() / 8.0;
 		double steps = degrees / 15.0;
 
-		if (event->modifiers() & Qt::ControlModifier) {
-			// Vertical scale: linear with mouse wheel
+		bool ctrl = event->modifiers() & Qt::ControlModifier;
+		bool shift = event->modifiers() & Qt::ShiftModifier;
+
+		if (ctrl && shift) {
+			// Ctrl+Shift+wheel: vertical scale
 			yScale = std::clamp(yScale + steps * 0.1, 0.1, 50.0);
-		} else {
-			// Horizontal scale: exponential / proportional
-			// Larger wheel movement -> exponentially larger scale change
+		} else if (ctrl) {
+			// Ctrl+wheel: horizontal scale (zoom) centered on mouse
 			double factor = std::pow(1.2, steps);
 			double mouseX = event->position().x();
 			double sampleAtMouse = pixelToSample(static_cast<int>(mouseX));
@@ -944,6 +953,17 @@ protected:
 			scrollOffset = sampleAtMouse - mouseX / xScale;
 			double maxOff = std::max(0.0, totalSamples() - visibleSamples());
 			scrollOffset = std::clamp(scrollOffset, 0.0, maxOff);
+		} else if (shift) {
+			// Shift+wheel: scroll waveform left/right
+			double scrollSteps = steps;
+			if (settings && settings->invertMouseWheelScroll)
+				scrollSteps = -scrollSteps;
+			double scrollAmount = visibleSamples() * 0.1 * scrollSteps;
+			setScrollOffset(scrollOffset - scrollAmount);
+		} else {
+			// Plain wheel: no action
+			event->ignore();
+			return;
 		}
 		update();
 		emit scrollChanged();
