@@ -667,6 +667,7 @@ signals:
 	void mouseSampleChanged(double sampleIndex);
 	void scrollChanged();
 	void tapeDataChanged();
+	void recordClicked(double sampleIndex);
 
 protected:
 	void paintEvent(QPaintEvent *) override {
@@ -920,6 +921,8 @@ protected:
 			} else {
 				dragging = true;
 				dragLastX = event->position().x();
+				dragStartX = event->position().x();
+				dragStartY = event->position().y();
 				setCursor(Qt::ClosedHandCursor);
 			}
 		}
@@ -928,6 +931,16 @@ protected:
 
 	void mouseReleaseEvent(QMouseEvent *event) override {
 		if (event->button() == Qt::LeftButton) {
+			if (dragging) {
+				// Detect click vs drag: if mouse barely moved, treat as click
+				double dx = event->position().x() - dragStartX;
+				double dy = event->position().y() - dragStartY;
+				if (dx * dx + dy * dy < 9.0) {
+					double sampleIdx = pixelToSample(
+						static_cast<int>(event->position().x()));
+					emit recordClicked(sampleIdx);
+				}
+			}
 			if (editing) {
 				editing = false;
 				editSampleIndex = -1;
@@ -1125,6 +1138,8 @@ private:
 
 	bool dragging = false;
 	double dragLastX = 0;
+	double dragStartX = 0;
+	double dragStartY = 0;
 
 	// Point editing state (Ctrl+click)
 	bool editing = false;
@@ -1314,6 +1329,8 @@ private:
 			this, &MainWindow::onMouseSampleChanged);
 		connect(waveformView, &WaveformView::tapeDataChanged,
 			this, &MainWindow::refreshRecordTable);
+		connect(waveformView, &WaveformView::recordClicked,
+			this, &MainWindow::onWaveformRecordClicked);
 
 		// --- Middle pane: status labels ---
 		auto *middleWidget = new QWidget(splitter);
@@ -1579,6 +1596,20 @@ private slots:
 		recordTable->resizeColumnsToContents();
 	}
 
+	void showRecordDetail(Record &record) {
+		if (!hexDetailView) return;
+		QString detail;
+		detail += QString("<b>%1</b> Record %2  Type: %3  Addr: 0x%4  Len: %5  Status: %6<br><br>")
+			.arg(QString::fromStdString(record.GetName()).trimmed())
+			.arg(record.GetRecordNumber())
+			.arg(QString::fromStdString(record.GetTypeName()))
+			.arg(record.GetAddress(), 4, 16, QChar('0'))
+			.arg(record.GetDataLength())
+			.arg(QString::fromStdString(record.GetStatusString()));
+		detail += "<pre>" + QString::fromStdString(record.GetHexDump()) + "</pre>";
+		hexDetailView->setHtml(detail);
+	}
+
 	void onRecordTableClicked(int row, int /*col*/) {
 		// Find the record at this row index
 		int idx = 0;
@@ -1586,23 +1617,25 @@ private slots:
 			for (auto &record : file.GetRecords()) {
 				if (idx == row) {
 					waveformView->setScrollOffset(record.GetStartIndex());
-
-					// Show hex detail
-					if (hexDetailView) {
-						QString detail;
-						detail += QString("<b>%1</b> Record %2  Type: %3  Addr: 0x%4  Len: %5  Status: %6<br><br>")
-							.arg(QString::fromStdString(record.GetName()).trimmed())
-							.arg(record.GetRecordNumber())
-							.arg(QString::fromStdString(record.GetTypeName()))
-							.arg(record.GetAddress(), 4, 16, QChar('0'))
-							.arg(record.GetDataLength())
-							.arg(QString::fromStdString(record.GetStatusString()));
-						detail += "<pre>" + QString::fromStdString(record.GetHexDump()) + "</pre>";
-						hexDetailView->setHtml(detail);
-					}
+					showRecordDetail(record);
 					return;
 				}
 				idx++;
+			}
+		}
+	}
+
+	void onWaveformRecordClicked(double sampleIndex) {
+		// Find which record contains this sample and select it
+		int row = 0;
+		for (auto &file : tape.GetFiles()) {
+			for (auto &record : file.GetRecords()) {
+				if (record.ContainsIndex(static_cast<TapeIndex>(sampleIndex))) {
+					recordTable->selectRow(row);
+					showRecordDetail(record);
+					return;
+				}
+				row++;
 			}
 		}
 	}
