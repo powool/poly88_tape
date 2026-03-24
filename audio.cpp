@@ -131,6 +131,24 @@ int Audio::FindThisOrNextZeroCrossing(int index, int hysterisis) {
 	return index;
 }
 
+// This detects a negative to positive transition
+int Audio::FindThisOrPreviousZeroCrossing(int index, int hysterisis) {
+
+	// skip to next negative to positive signal transition
+	while (index > 0) {
+		if ((Value(index) - hysterisis < 0) && (Value(index + 1) - hysterisis >= 0)) {
+			break;
+		}
+		index--;
+	}
+
+	if(index <= 0) {
+		throw AudioEOF("ran out of data");
+	}
+
+	return index;
+}
+
 // This detects a positive to negative transition
 int Audio::FindThisOrNextNegativeZeroCrossing(int index, int hysterisis) {
 
