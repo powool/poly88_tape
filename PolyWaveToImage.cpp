@@ -573,10 +573,6 @@ public:
 		setWindowTitle("Settings");
 		auto *layout = new QFormLayout(this);
 
-		booleanCheckBox = new QCheckBox(this);
-		booleanCheckBox->setChecked(settingsRef.booleanPlaceholder);
-		layout->addRow("Boolean", booleanCheckBox);
-
 		invertSignalCheckBox = new QCheckBox(this);
 		invertSignalCheckBox->setChecked(settingsRef.invertSignal);
 		layout->addRow("Invert Signal", invertSignalCheckBox);
@@ -617,7 +613,6 @@ public:
 	}
 
 	void accept() override {
-		settingsRef.booleanPlaceholder = booleanCheckBox->isChecked();
 		settingsRef.invertSignal = invertSignalCheckBox->isChecked();
 		settingsRef.bitrate = static_cast<uint32_t>(bitrateSpin->value());
 		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
@@ -629,7 +624,6 @@ public:
 
 private:
 	MainWindowSettings &settingsRef;
-	QCheckBox *booleanCheckBox;
 	QCheckBox *invertSignalCheckBox;
 	QSpinBox *bitrateSpin;
 	QComboBox *tapeFormatCombo;
