@@ -1503,6 +1503,7 @@ private:
 
 	// Scroll button acceleration state
 	QTimer *scrollTimer = nullptr;
+	QDialog *quickHelpDialog = nullptr;
 	int scrollDirection = 0;    // -1 = left, +1 = right, 0 = stopped
 	int scrollTickCount = 0;
 
@@ -2294,21 +2295,77 @@ private slots:
 	}
 
 	void onQuickHelp() {
-		QDialog helpDlg(this);
-		helpDlg.setWindowTitle("Quick Help");
-		helpDlg.resize(500, 400);
-		auto *layout = new QVBoxLayout(&helpDlg);
-		auto *browser = new QTextBrowser(&helpDlg);
-		browser->setMarkdown("insert help here");
+		if (quickHelpDialog) {
+			quickHelpDialog->raise();
+			quickHelpDialog->activateWindow();
+			return;
+		}
+		quickHelpDialog = new QDialog(this);
+		quickHelpDialog->setWindowTitle("Quick Help");
+		quickHelpDialog->resize(500, 400);
+		quickHelpDialog->setAttribute(Qt::WA_DeleteOnClose);
+		connect(quickHelpDialog, &QObject::destroyed, this, [this]() {
+			quickHelpDialog = nullptr;
+		});
+		auto *layout = new QVBoxLayout(quickHelpDialog);
+		auto *browser = new QTextBrowser(quickHelpDialog);
+		browser->setHtml(R"(
+<h3> Introduction </h3>
+
+This program provides a means of examining and extracting digital data
+from audio tapes written using a circa 1976 PolyMorphic-88 S-100 computer.
+
+The audio files are binary encoded from binary in two basic ways: Kansas City Standard
+and what they called Polyphase (which is just Manchester encoding).
+
+To organize the data, each tape file is written as one or more records, each
+of which has a header, a header checksum, data, and a data checksum.
+
+The goal is to be able to preserve these audiotapes in both formats, first
+by converting them from analog audio to mono 16 bit signed WAV files.
+
+Once that is done, run this program, load that WAV file, and see what
+you can find on the tape!
+
+<h3> Menus </h3>
+
+Waveform context menu
+
+<ul>
+<li> <b> scan for record </b> attempts to find a new record starting at mouse position </li>
+</ul>
+
+
+
+<h3> Mouse </h3>
+
+<ul>
+<li> <b> Control Mouse Wheel </b> change horizontal scale </li>
+<li> <b> Shift Mouse Wheel </b> scroll left and right </li>
+<li> <b> Control-Shift Mouse Wheel </b> change vertical scale </li>
+<li> <b> Left Click drag </b> drag waveform left and right </li>
+<li> <b> Control Left Click </b> set selected waveform to that location and decode two bytes </li>
+<li> <b> Shift Left Click </b> drag waveform vertically (zoom in for this to work) </li>
+</ul>
+
+<h3> Keys </h3>
+<ul>
+<li> <b> Right Arrow </b> scroll right to next negative to positive transition </li>
+<li> <b> Left Arrow </b> scroll left to previous negative to positive transition </li>
+<li> <b> Control Right Arrow </b> scroll right to next byte boundary </li>
+<li> <b> Control Left Arrow </b> scroll left to previous byte boundary (approximate, uses samples per bit)</li>
+</ul>
+
+)");
 		layout->addWidget(browser);
-		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok, &helpDlg);
+		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok, quickHelpDialog);
 		layout->addWidget(buttons);
-		connect(buttons, &QDialogButtonBox::accepted, &helpDlg, &QDialog::accept);
-		helpDlg.exec();
+		connect(buttons, &QDialogButtonBox::accepted, quickHelpDialog, &QDialog::close);
+		quickHelpDialog->show();
 	}
 
 	void onDocumentation() {
-		QDesktopServices::openUrl(QUrl("http://help.me/fast"));
+		QDesktopServices::openUrl(QUrl("https://github.com/powool/poly88_tape"));
 	}
 
 	void onAbout() {
