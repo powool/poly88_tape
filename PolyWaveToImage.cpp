@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string>
 #include <vector>
@@ -381,21 +382,21 @@ class Record {
 	std::string FieldNameAtIndex(TapeIndex idx) {
 		for (auto &b : leader)
 			if (idx >= b.startIndex && idx < b.startIndex + b.length) return "leader";
-		if (soh.length > 0 && idx >= soh.startIndex && idx < soh.startIndex + soh.length) return "soh";
+		if (soh.length > 0 && idx >= soh.startIndex && idx < soh.startIndex + soh.length) return std::format("soh:{:02x}", *(soh.value));
 		for (int i = 0; i < 8; i++)
 			if (name[i].length > 0 && idx >= name[i].startIndex && idx < name[i].startIndex + name[i].length)
-				return std::string("name[") + std::to_string(i) + "]";
-		if (rcdL.length > 0 && idx >= rcdL.startIndex && idx < rcdL.startIndex + rcdL.length) return "rcdL";
-		if (rcdH.length > 0 && idx >= rcdH.startIndex && idx < rcdH.startIndex + rcdH.length) return "rcdH";
-		if (ln.length > 0 && idx >= ln.startIndex && idx < ln.startIndex + ln.length) return "ln";
-		if (addrL.length > 0 && idx >= addrL.startIndex && idx < addrL.startIndex + addrL.length) return "addrL";
-		if (addrH.length > 0 && idx >= addrH.startIndex && idx < addrH.startIndex + addrH.length) return "addrH";
-		if (type.length > 0 && idx >= type.startIndex && idx < type.startIndex + type.length) return "type";
-		if (csHeader.length > 0 && idx >= csHeader.startIndex && idx < csHeader.startIndex + csHeader.length) return "csHeader";
+				return std::format("name[{}]:{:02x}", i, *(name[i].value));
+		if (rcdL.length > 0 && idx >= rcdL.startIndex && idx < rcdL.startIndex + rcdL.length) return std::format("rcdL:{:02x}", *(rcdL.value));
+		if (rcdH.length > 0 && idx >= rcdH.startIndex && idx < rcdH.startIndex + rcdH.length) return std::format("rcdH:{:02x}", *(rcdH.value));
+		if (ln.length > 0 && idx >= ln.startIndex && idx < ln.startIndex + ln.length) return std::format("ln:{:02x}", *(ln.value));
+		if (addrL.length > 0 && idx >= addrL.startIndex && idx < addrL.startIndex + addrL.length) return std::format("addrL:{:02x}", *(addrL.value));
+		if (addrH.length > 0 && idx >= addrH.startIndex && idx < addrH.startIndex + addrH.length) return std::format("addrH:{:02x}", *(addrH.value));
+		if (type.length > 0 && idx >= type.startIndex && idx < type.startIndex + type.length) return std::format("type:{:02x}", *(type.value));
+		if (csHeader.length > 0 && idx >= csHeader.startIndex && idx < csHeader.startIndex + csHeader.length) return std::format("csHeader:{:02x}", *(csHeader.value));
 		for (size_t i = 0; i < data.size(); i++)
 			if (data[i].length > 0 && idx >= data[i].startIndex && idx < data[i].startIndex + data[i].length)
-				return std::string("data[") + std::to_string(i) + "]";
-		if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return "csData";
+				return std::format("data[{}]:{:02x}", i, *(data[i].value));
+		if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return std::format("csData:{:02x}", *(csData.value));
 		return "";
 	}
 
