@@ -71,16 +71,24 @@ class Record {
 	void Dump(bool showAll = false) {
 		TapeHeader *tapeHeader = static_cast<TapeHeader *>((void *) &header[0]);
 		if (showAll || gotSOH) {
-			std::cout << "SOH - ";
+			std::cout << std::format("{}SOH - ", (gotHeader ? "" : "* "));
 		}
 		if (showAll || gotHeader) {
-			std::cout << std::format("Name: {} Record {}", tapeHeader->GetName(), tapeHeader->rn()) << std::endl;
+			std::cout <<
+				std::format("Name: {} Record {} Type {}",
+				tapeHeader->GetName(), tapeHeader->rn(), std::to_string(tapeHeader->type)) <<
+				std::endl;
 		}
 		if (showAll || gotData) {
 			std::string characters;
 			int len = tapeHeader->len == 0 ? 256 : tapeHeader->len;
 			int i;
 			for (i = 0; i < len ; i++) {
+				if ((i) % 16 == 0) {
+					if (!gotHeader) {
+						std::cout << "* ";
+					}
+				}
 				std::cout << std::format("{:02x} ", data[i]);
 				if ((i+1) % 8 == 0) {
 					std::cout << " ";
