@@ -16,8 +16,13 @@ class Record {
 	bool gotSOH = false;
 	bool gotHeader = false;
 	bool gotData = false;
+	bool repairDataLength = false;
 	uint8_t headerChecksum;
 	uint8_t dataChecksum;
+
+	uint8_t header[sizeof(TapeHeader)];
+	uint8_t data[256];
+
     public:
 	Record() {;}
 	Record(std::string expectedName, uint16_t expectedRecordNumber) :
@@ -25,9 +30,6 @@ class Record {
 		expectedRecordNumber(expectedRecordNumber) {;}
 
 	static const uint8_t	SOH = 1;
-
-	uint8_t header[sizeof(TapeHeader)];
-	uint8_t data[256];
 
 	// We get called after FindEndOfNextLeader, which hands us
 	// the soh character, which we need to check here.
@@ -54,7 +56,13 @@ class Record {
 		}
 
 		TapeHeader *tapeHeader = static_cast<TapeHeader *>((void *) &header[0]);
-		uint16_t dataLength = tapeHeader->len == 0 ? 256 : tapeHeader->len;
+
+		// If the header is corrupt, the uncorrected data length we get
+		// might not be correct, but if the repair flag is set, we'll
+		// assume it is 256 bytes and hope for the best. This gives us
+		// the greatest chance of viewing problematic data or recovering
+		// good data.
+		auto dataLength = GetDataLength();
 
 		uint8_t dataSum = 0;
 		for (int i = 0; i < dataLength; i++) {
@@ -72,7 +80,22 @@ class Record {
 		}
 		return tapeIndex;
 	}
-	void Dump(bool showAll = false) {
+
+	void SetRepairDataLength(bool r) {
+		repairDataLength = r;
+	}
+
+	uint16_t GetDataLength() const {
+		TapeHeader *tapeHeader = static_cast<TapeHeader *>((void *) &header[0]);
+		uint16_t dataLength = tapeHeader->len == 0 ? 256 : tapeHeader->len;
+		if (gotHeader || !repairDataLength) {
+			return dataLength;
+		} else {
+			return 256;
+		}
+	};
+
+	void Dump(bool showAll = false) const {
 		TapeHeader *tapeHeader = static_cast<TapeHeader *>((void *) &header[0]);
 		if (showAll || gotSOH) {
 			std::cout << std::format("{}SOH - ", (gotHeader ? "" : "* "));

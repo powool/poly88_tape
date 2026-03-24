@@ -100,6 +100,7 @@ class Record {
 	TapeByte csData;
 
 	ScanStatus scanStatus = ScanStatus::NoLeader;
+	bool repairDataLength = false;
 
 	enum TapeType {
 		AbsoluteBinary = 0x00,
@@ -111,6 +112,8 @@ class Record {
 
     public:
 	ScanStatus GetScanStatus() const { return scanStatus; }
+
+	void SetRepairDataLength(bool r) { repairDataLength = r; }
 
 	std::string GetTypeName() const {
 		if (!type.value) return "?";
@@ -131,7 +134,10 @@ class Record {
 		return 0;
 	}
 
-	uint16_t GetDataLength() const {
+	uint16_t GetDataLength() {
+		if (repairDataLength && !HeaderChecksumIsValid()) {
+			return 256;
+		}
 		if (!ln.value) return 0;
 		return *(ln.value) == 0 ? 256 : *(ln.value);
 	}
@@ -151,8 +157,7 @@ class Record {
 	// Generate a hex dump of the data bytes, 16 bytes per line with ASCII
 	std::string GetHexDump() const {
 		std::string result;
-		uint16_t len = GetDataLength();
-		if (len > data.size()) len = static_cast<uint16_t>(data.size());
+		uint16_t len = static_cast<uint16_t>(data.size());
 
 		for (uint16_t i = 0; i < len; i += 16) {
 			if (i > 0) result += "\n";
@@ -428,7 +433,7 @@ class Record {
 		bool headerCsFailed = !HeaderChecksumIsValid();
 
 		// --- Read data bytes ---
-		uint16_t dataLength = ln.value ? (*(ln.value) == 0 ? 256 : *(ln.value)) : 0;
+		uint16_t dataLength = GetDataLength();
 		try {
 			data.resize(dataLength);
 			for (uint16_t i = 0; i < dataLength; i++) {
@@ -506,6 +511,7 @@ struct MainWindowSettings {
 	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
 	double curveDragRange = 0.25;
 	bool invertMouseWheelScroll = false;
+	bool autoRepairHeaderLength = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -551,6 +557,10 @@ public:
 		invertMouseWheelScrollCheckBox->setChecked(settingsRef.invertMouseWheelScroll);
 		layout->addRow("Invert Mouse Wheel Scroll", invertMouseWheelScrollCheckBox);
 
+		autoRepairHeaderLengthCheckBox = new QCheckBox(this);
+		autoRepairHeaderLengthCheckBox->setChecked(settingsRef.autoRepairHeaderLength);
+		layout->addRow("Auto Repair Header Length", autoRepairHeaderLengthCheckBox);
+
 		auto *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 		layout->addRow(buttons);
@@ -566,6 +576,7 @@ public:
 		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
 		settingsRef.curveDragRange = curveDragRangeSpin->value();
 		settingsRef.invertMouseWheelScroll = invertMouseWheelScrollCheckBox->isChecked();
+		settingsRef.autoRepairHeaderLength = autoRepairHeaderLengthCheckBox->isChecked();
 		QDialog::accept();
 	}
 
@@ -577,6 +588,7 @@ private:
 	QComboBox *tapeFormatCombo;
 	QDoubleSpinBox *curveDragRangeSpin;
 	QCheckBox *invertMouseWheelScrollCheckBox;
+	QCheckBox *autoRepairHeaderLengthCheckBox;
 };
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1013,7 @@ private slots:
 		if (!decoder || !tape) return;
 
 		Record record;
+		if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
 		auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
 
 		if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
@@ -1058,6 +1071,7 @@ private slots:
 
 		while (idx < audio->SampleCount()) {
 			Record record;
+			if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
 			auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
 
 			if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
@@ -1672,6 +1686,7 @@ private slots:
 
 		while (idx < audioPtr->SampleCount()) {
 			Record record;
+			record.SetRepairDataLength(settings.autoRepairHeaderLength);
 			auto [nextIdx, status] = record.ReadFromDecoder(dec, idx);
 
 			if (status == ScanStatus::AudioEOF) {
