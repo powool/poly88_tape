@@ -197,7 +197,14 @@ class Record {
 		return result;
 	}
 
+	TapeIndex GetSOHIndex() const {
+		return soh.startIndex;
+	}
+
 	TapeIndex GetStartIndex() {
+		if (soh.startIndex > 0) {
+			return soh.startIndex;
+		}
 		if (leader.size() && leader[0].value) {
 			return leader[0].startIndex;
 		}
@@ -356,7 +363,7 @@ class Record {
 		TapeIndex idx = leaderStart;
 
 		// --- Find leader and SOH ---
-		std::pair<TapeIndex, uint8_t> leaderResult;
+		LeaderResult leaderResult;
 		try {
 			leaderResult = dec->FindEndOfNextLeader(idx, 10);
 		} catch (const AudioEOF &) {
@@ -367,40 +374,24 @@ class Record {
 			return {idx, ScanStatus::NoLeader};
 		}
 
-		// We don't get individual leader byte positions from FindEndOfNextLeader,
-		// so record the leader region as a single TapeByte spanning the range.
+		// Record the leader region (0xe6 bytes) up to the SOH byte start.
 		{
 			TapeByte leaderByte;
 			leaderByte.fieldType = FieldType::Leader;
 			leaderByte.startIndex = leaderStart;
-			leaderByte.length = leaderResult.first - leaderStart;
+			leaderByte.length = leaderResult.sohStart - leaderStart;
 			leaderByte.value = 0xe6;
 			leader.push_back(leaderByte);
 		}
 
-		// leaderResult contains the first non-0xe6 byte (should be SOH)
+		// SOH byte: starts at sohStart, ends at nextIndex
 		soh.fieldType = FieldType::SOH;
-		soh.startIndex = leaderResult.first;
-		soh.value = leaderResult.second;
-		// We need the end of the SOH byte to compute its length and get next idx
-		// The SOH was already read by FindEndOfNextLeader, but we don't have
-		// the end position. Read one more byte to get the boundary, then use
-		// that byte as the first header byte.
-		// Actually, leaderResult.first IS the next index after the SOH byte was read.
-		// Looking at DataInterfaceBase::FindEndOfNextLeader — it returns readResult
-		// which is the pair from ReadByte, so .first is the index AFTER the byte.
-		// But the byte value is .second. So leaderResult.first is the next read position.
+		soh.startIndex = leaderResult.sohStart;
+		soh.length = leaderResult.nextIndex - leaderResult.sohStart;
+		soh.value = leaderResult.value;
+		idx = leaderResult.nextIndex;
 
-		// We need the start of the SOH byte. FindEndOfNextLeader reads leader bytes
-		// and then reads the first non-leader byte. The returned .first is the
-		// position after that byte. So SOH start = leaderResult.first - one byte width.
-		// We don't know the exact byte width, so we'll estimate from the leader region.
-		// Better approach: just set soh length to 0 for now and start reading header
-		// from leaderResult.first.
-		soh.length = 0;  // we don't have exact SOH boundaries from FindEndOfNextLeader
-		idx = leaderResult.first;
-
-		if (leaderResult.second != 0x01) {
+		if (leaderResult.value != 0x01) {
 			scanStatus = ScanStatus::NoSOH;
 			return {idx, ScanStatus::NoSOH};
 		}

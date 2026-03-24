@@ -28,12 +28,18 @@ struct BitReadResult {
 	std::vector<BitInfo> bits;  // per-bit positional data (MSB ordering matches decoder)
 };
 
+struct LeaderResult {
+	TapeIndex sohStart = 0;   // tape index where the SOH byte begins
+	TapeIndex nextIndex = 0;  // tape index after the SOH byte (next read position)
+	uint8_t value = 0;        // the first non-0xe6 byte value (should be 0x01 SOH)
+};
+
 class DataInterface {
     public:
 
 	// Read and re-sync as needed until we read a series of 0xe6 bytes.
-	// Return the tape index and first non-0xe6 byte.
-	virtual std::pair<TapeIndex, uint8_t> FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) = 0;
+	// Return the SOH byte start position, the next read index, and the byte value.
+	virtual LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) = 0;
 
 	// Read a single byte - the returned TapeIndex is a potentially
 	// virtual bit pointer - it may or may not point to an audio

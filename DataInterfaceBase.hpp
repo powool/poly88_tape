@@ -24,7 +24,7 @@ class DataInterfaceBase : public DataInterface {
 	// Read and re-sync as needed until we read a series of 0xe6 bytes.
 	// Return the tape index and first non-0xe6 byte. This is slow, so
 	// make sure to find the carrier before calling this.
-	std::pair<TapeIndex, uint8_t> FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) {
+	LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) {
 		std::pair<TapeIndex, uint8_t> readResult;
 
 		// This loop will either throw a TapeEOF, or it
@@ -65,7 +65,9 @@ class DataInterfaceBase : public DataInterface {
 			tapeIndex = readResult.first;
 		}
 
-		return readResult;
+		// tapeIndex is the position from which the non-0xe6 byte was read
+		// (i.e. the SOH byte start), readResult.first is the next read position
+		return { tapeIndex, readResult.first, readResult.second };
 	}
 	void SetDebugByte(bool d) { debugByte = d; }
 	void SetDebugBit(bool d) { debugBit = d; }

@@ -33,13 +33,13 @@ class Record {
 
 	// We get called after FindEndOfNextLeader, which hands us
 	// the soh character, which we need to check here.
-	TapeIndex Read(DataInterfacePtr dataInterface, std::pair<TapeIndex, uint8_t> soh) {
+	TapeIndex Read(DataInterfacePtr dataInterface, LeaderResult soh) {
 		std::pair<TapeIndex, uint8_t> readResult;
-		if (soh.second == SOH) {
+		if (soh.value == SOH) {
 			gotSOH = true;
 		}
 
-		auto tapeIndex  = soh.first;
+		auto tapeIndex  = soh.nextIndex;
 		uint8_t headerSum = 0;
 		for (int i = 0; i < sizeof(TapeHeader); i++) {
 			readResult = dataInterface->ReadByte(tapeIndex);
