@@ -20,6 +20,16 @@ add_custom_target(
 	COMMAND rm -rf CMakeCache.txt CMakeFiles Makefile cmake_install.cmake Debug Release
 )
 
-#add_executable(tape_biphase tape_biphase.cpp audio.cpp)
-#add_executable(tape_byte tape_byte.cpp audio.cpp)
+# Qt Stuff
+
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+qt_standard_project_setup()
+
+qt_add_executable(PolyWaveToImage
+	PolyWaveToImage.cpp
+	audio.cpp
+)
+
+target_link_libraries(PolyWaveToImage PRIVATE Qt6::Widgets Qt6::Gui)
+
 add_executable(testing testing.cpp audio.cpp)
