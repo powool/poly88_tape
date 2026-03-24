@@ -73,15 +73,15 @@ class Record {
 		if (showAll || gotSOH) {
 			std::cout << std::format("{}SOH - ", (gotHeader ? "" : "* "));
 		}
+		int len = tapeHeader->len == 0 ? 256 : tapeHeader->len;
 		if (showAll || gotHeader) {
 			std::cout <<
-				std::format("Name: {} Record {} Type {:1d} Addr {:04x}",
-				tapeHeader->GetName(), tapeHeader->rn(), tapeHeader->type, tapeHeader->addr()) <<
+				std::format("Name: {} Record {} Type {:1d} Addr {:04x} Length {}",
+				tapeHeader->GetName(), tapeHeader->rn(), tapeHeader->type, tapeHeader->addr(), len) <<
 				std::endl;
 		}
 		if (showAll || gotData) {
 			std::string characters;
-			int len = tapeHeader->len == 0 ? 256 : tapeHeader->len;
 			int i;
 			for (i = 0; i < len ; i++) {
 				if ((i) % 16 == 0) {
@@ -104,11 +104,11 @@ class Record {
 				}
 			}
 			while(true) {
-				if ((i+1) % 16 == 0) break;
 				if ((i+1) % 8 == 0) {
 					std::cout << " ";
 				}
 				std::cout << "   ";
+				if ((i+1) % 16 == 0) break;
 				i++;
 			}
 			if (characters.size()) {
