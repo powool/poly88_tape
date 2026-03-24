@@ -592,6 +592,17 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// WaveformSelection - data resulting from a Ctrl+click selection
+// ---------------------------------------------------------------------------
+struct WaveformSelection {
+	bool active = false;
+	TapeIndex startIndex = 0;
+	TapeIndex endIndex = 0;   // end of second byte's last bit
+	BitReadResult byte1;      // first decoded byte
+	BitReadResult byte2;      // second decoded byte (starts where byte1 ends)
+};
+
+// ---------------------------------------------------------------------------
 // WaveformView - custom widget for rendering audio waveform
 // ---------------------------------------------------------------------------
 class WaveformView : public QWidget {
@@ -615,6 +626,7 @@ public:
 	void setAudio(AudioPtr a) {
 		audio = a;
 		scrollOffset = 0;
+		clearSelection();
 		update();
 		emit scrollChanged();
 	}
@@ -629,6 +641,39 @@ public:
 	}
 
 	AudioPtr getAudio() const { return audio; }
+
+	void clearSelection() {
+		selection = WaveformSelection();
+		update();
+		emit selectionChanged(selection);
+	}
+
+	void computeSelection(TapeIndex startIdx) {
+		if (!decoder) return;
+		selection = WaveformSelection();
+		try {
+			selection.byte1 = decoder->ReadByteWithBits(startIdx);
+			selection.byte2 = decoder->ReadByteWithBits(selection.byte1.endIndex);
+			selection.startIndex = startIdx;
+			// Set end to the end of the last bit of byte2
+			if (!selection.byte2.bits.empty()) {
+				selection.endIndex = selection.byte2.bits.back().endIndex;
+			} else {
+				selection.endIndex = selection.byte2.endIndex;
+			}
+			selection.active = true;
+		} catch (...) {
+			selection = WaveformSelection();
+		}
+		update();
+		emit selectionChanged(selection);
+	}
+
+	void refreshSelection() {
+		if (selection.active) {
+			computeSelection(selection.startIndex);
+		}
+	}
 
 	// Convert a widget-local X pixel to a sample index
 	double pixelToSample(int px) const {
@@ -668,6 +713,7 @@ signals:
 	void scrollChanged();
 	void tapeDataChanged();
 	void recordClicked(double sampleIndex);
+	void selectionChanged(const WaveformSelection &sel);
 
 protected:
 	void paintEvent(QPaintEvent *) override {
@@ -735,6 +781,9 @@ protected:
 			}
 		}
 		p.setRenderHint(QPainter::Antialiasing, false);
+
+		// Draw waveform selection highlight
+		drawSelectionHighlight(p, w, h);
 
 		// Draw TapeByte tick marks on the X axis
 		drawByteTickMarks(p, w, h);
@@ -838,16 +887,58 @@ protected:
 		}
 	}
 
+	void drawSelectionHighlight(QPainter &p, int w, int h) {
+		if (!selection.active) return;
+
+		// Collect all bit boundary indices from both decoded bytes
+		std::vector<TapeIndex> bitBoundaries;
+		for (auto &bi : selection.byte1.bits) {
+			bitBoundaries.push_back(bi.startIndex);
+			bitBoundaries.push_back(bi.endIndex);
+		}
+		for (auto &bi : selection.byte2.bits) {
+			bitBoundaries.push_back(bi.startIndex);
+			bitBoundaries.push_back(bi.endIndex);
+		}
+		std::sort(bitBoundaries.begin(), bitBoundaries.end());
+		// Remove duplicates
+		bitBoundaries.erase(
+			std::unique(bitBoundaries.begin(), bitBoundaries.end()),
+			bitBoundaries.end());
+
+		QColor hlColor(0, 200, 0, 40);  // faint transparent green
+		p.setPen(Qt::NoPen);
+		p.setBrush(hlColor);
+
+		int pxStart = static_cast<int>(sampleToPixel(selection.startIndex));
+		int pxEnd = static_cast<int>(sampleToPixel(selection.endIndex));
+		pxStart = std::max(pxStart, 0);
+		pxEnd = std::min(pxEnd, w);
+
+		if (bitBoundaries.size() < 2) {
+			// No bit info — draw one solid rectangle
+			if (pxEnd > pxStart) {
+				p.drawRect(pxStart, 0, pxEnd - pxStart, h);
+			}
+		} else {
+			// Draw highlight between consecutive bit boundaries,
+			// leaving a 1-pixel gap at each boundary
+			for (size_t i = 0; i + 1 < bitBoundaries.size(); i++) {
+				int segStart = static_cast<int>(
+					std::ceil(sampleToPixel(bitBoundaries[i]))) + 1;
+				int segEnd = static_cast<int>(
+					sampleToPixel(bitBoundaries[i + 1]));
+				segStart = std::max(segStart, pxStart);
+				segEnd = std::min(segEnd, pxEnd);
+				if (segEnd > segStart) {
+					p.drawRect(segStart, 0, segEnd - segStart, h);
+				}
+			}
+		}
+	}
+
 	void mouseMoveEvent(QMouseEvent *event) override {
-		if (editing && editSampleIndex >= 0 && audio) {
-			// Point edit: drag vertically to change single sample value
-			int midY = height() / 2;
-			double py = event->position().y();
-			double val = (midY - py) / (yScale * midY / 32768.0);
-			val = std::clamp(val, -32768.0, 32767.0);
-			audio->SetValue(editSampleIndex, static_cast<int16_t>(val));
-			update();
-		} else if (curveDragging && audio) {
+		if (curveDragging && audio) {
 			// Curve drag: vertical mouse delta applies a smoothed offset
 			// to a range of samples centered on the click point
 			double dy = event->position().y() - curveDragStartY;
@@ -888,17 +979,11 @@ protected:
 			bool ctrl = event->modifiers() & Qt::ControlModifier;
 			bool shift = event->modifiers() & Qt::ShiftModifier;
 
-			if (ctrl && audio && xScale >= 2.0) {
-				// Point edit mode: Ctrl+click when zoomed in enough
-				editing = true;
-				editSampleIndex = static_cast<int>(std::round(
-					pixelToSample(static_cast<int>(event->position().x()))));
-				if (editSampleIndex < 0 || editSampleIndex >= audio->SampleCount()) {
-					editing = false;
-					editSampleIndex = -1;
-				} else {
-					setCursor(Qt::CrossCursor);
-				}
+			if (ctrl && audio) {
+				// Ctrl+click: set waveform selection start
+				double clickSample = pixelToSample(
+					static_cast<int>(event->position().x()));
+				computeSelection(clickSample);
 			} else if (shift && audio && xScale >= 2.0) {
 				// Curve drag mode: Shift+click when zoomed in enough
 				curveDragging = true;
@@ -941,14 +1026,11 @@ protected:
 					emit recordClicked(sampleIdx);
 				}
 			}
-			if (editing) {
-				editing = false;
-				editSampleIndex = -1;
-			}
 			if (curveDragging) {
 				curveDragging = false;
 				curveCenterSample = -1;
 				curveOriginalValues.clear();
+				refreshSelection();
 			}
 			dragging = false;
 			setCursor(Qt::ArrowCursor);
@@ -1141,9 +1223,8 @@ private:
 	double dragStartX = 0;
 	double dragStartY = 0;
 
-	// Point editing state (Ctrl+click)
-	bool editing = false;
-	int editSampleIndex = -1;
+	// Waveform selection state (Ctrl+click)
+	WaveformSelection selection;
 
 	// Curve drag editing state (Shift+click)
 	bool curveDragging = false;
@@ -1193,6 +1274,15 @@ private:
 	QScrollBar *hScrollBar = nullptr;
 	QPushButton *scrollLeftBtn = nullptr;
 	QPushButton *scrollRightBtn = nullptr;
+	// Selected Waveform row
+	QLabel *selWaveIndexLabel = nullptr;
+	QLabel *selWaveWidthLabel = nullptr;
+	QLabel *selWaveByte1BinLabel = nullptr;
+	QLabel *selWaveByte1HexLabel = nullptr;
+	QLabel *selWaveByte2BinLabel = nullptr;
+	QLabel *selWaveByte2HexLabel = nullptr;
+
+	// Selected Record row
 	QLabel *indexLabel = nullptr;
 	QLabel *widthLabel = nullptr;
 	QLabel *tapeFileLabel = nullptr;
@@ -1331,36 +1421,68 @@ private:
 			this, &MainWindow::refreshRecordTable);
 		connect(waveformView, &WaveformView::recordClicked,
 			this, &MainWindow::onWaveformRecordClicked);
+		connect(waveformView, &WaveformView::selectionChanged,
+			this, &MainWindow::onSelectionChanged);
 
-		// --- Middle pane: status labels ---
+		// --- Middle pane: two rows of status labels ---
 		auto *middleWidget = new QWidget(splitter);
-		auto *middleLayout = new QHBoxLayout(middleWidget);
-		middleLayout->setContentsMargins(8, 4, 8, 4);
+		auto *middleVLayout = new QVBoxLayout(middleWidget);
+		middleVLayout->setContentsMargins(0, 0, 0, 0);
+		middleVLayout->setSpacing(0);
 
-		auto makeStatusPair = [&](const QString &labelText) -> QLabel * {
-			auto *nameLabel = new QLabel(labelText + ":", middleWidget);
+		// Row 1: Selected Waveform
+		auto *selWaveRow = new QHBoxLayout();
+		selWaveRow->setContentsMargins(8, 2, 8, 2);
+
+		auto makeStatusPairIn = [](QHBoxLayout *row, QWidget *parent, const QString &labelText) -> QLabel * {
+			auto *nameLabel = new QLabel(labelText + ":", parent);
 			nameLabel->setStyleSheet("font-weight: bold;");
-			auto *valueLabel = new QLabel("—", middleWidget);
-			middleLayout->addWidget(nameLabel);
-			middleLayout->addWidget(valueLabel);
-			middleLayout->addSpacing(16);
+			auto *valueLabel = new QLabel("\u2014", parent);
+			row->addWidget(nameLabel);
+			row->addWidget(valueLabel);
+			row->addSpacing(16);
 			return valueLabel;
 		};
 
-		indexLabel = makeStatusPair("Index");
-		widthLabel = makeStatusPair("Width");
-		tapeFileLabel = makeStatusPair("Tape File");
-		recordNumberLabel = makeStatusPair("Record Number");
-		byteLabel = makeStatusPair("Byte");
+		auto *selWaveTitleLabel = new QLabel("Selected Waveform", middleWidget);
+		selWaveTitleLabel->setStyleSheet("font-weight: bold; color: #88cc88;");
+		selWaveRow->addWidget(selWaveTitleLabel);
+		selWaveRow->addSpacing(16);
 
-		validityLabel = new QLabel("—", middleWidget);
+		selWaveIndexLabel = makeStatusPairIn(selWaveRow, middleWidget, "Index");
+		selWaveWidthLabel = makeStatusPairIn(selWaveRow, middleWidget, "Width");
+		selWaveByte1BinLabel = makeStatusPairIn(selWaveRow, middleWidget, "Byte 1 Bin");
+		selWaveByte1HexLabel = makeStatusPairIn(selWaveRow, middleWidget, "Hex");
+		selWaveByte2BinLabel = makeStatusPairIn(selWaveRow, middleWidget, "Byte 2 Bin");
+		selWaveByte2HexLabel = makeStatusPairIn(selWaveRow, middleWidget, "Hex");
+		selWaveRow->addStretch();
+		middleVLayout->addLayout(selWaveRow);
+
+		// Row 2: Selected Record
+		auto *selRecRow = new QHBoxLayout();
+		selRecRow->setContentsMargins(8, 2, 8, 2);
+
+		auto *selRecTitleLabel = new QLabel("Selected Record", middleWidget);
+		selRecTitleLabel->setStyleSheet("font-weight: bold; color: #88aacc;");
+		selRecRow->addWidget(selRecTitleLabel);
+		selRecRow->addSpacing(16);
+
+		indexLabel = makeStatusPairIn(selRecRow, middleWidget, "Index");
+		widthLabel = makeStatusPairIn(selRecRow, middleWidget, "Width");
+		tapeFileLabel = makeStatusPairIn(selRecRow, middleWidget, "Tape File");
+		recordNumberLabel = makeStatusPairIn(selRecRow, middleWidget, "Record Number");
+		byteLabel = makeStatusPairIn(selRecRow, middleWidget, "Byte");
+
+		validityLabel = new QLabel("\u2014", middleWidget);
 		auto *validTitleLabel = new QLabel("Status:", middleWidget);
 		validTitleLabel->setStyleSheet("font-weight: bold;");
-		middleLayout->addWidget(validTitleLabel);
-		middleLayout->addWidget(validityLabel);
+		selRecRow->addWidget(validTitleLabel);
+		selRecRow->addWidget(validityLabel);
 
-		middleLayout->addStretch();
-		middleWidget->setMaximumHeight(40);
+		selRecRow->addStretch();
+		middleVLayout->addLayout(selRecRow);
+
+		middleWidget->setMaximumHeight(60);
 
 		// --- Bottom pane: record table + hex detail ---
 		auto *bottomWidget = new QWidget(splitter);
@@ -1638,6 +1760,38 @@ private slots:
 				row++;
 			}
 		}
+	}
+
+	void onSelectionChanged(const WaveformSelection &sel) {
+		if (!sel.active) {
+			selWaveIndexLabel->setText("\u2014");
+			selWaveWidthLabel->setText("\u2014");
+			selWaveByte1BinLabel->setText("\u2014");
+			selWaveByte1HexLabel->setText("\u2014");
+			selWaveByte2BinLabel->setText("\u2014");
+			selWaveByte2HexLabel->setText("\u2014");
+			return;
+		}
+
+		selWaveIndexLabel->setText(QString::number(
+			static_cast<qint64>(sel.startIndex)));
+		selWaveWidthLabel->setText(QString::number(
+			static_cast<qint64>(sel.endIndex - sel.startIndex)));
+
+		auto toBin = [](uint8_t v) -> QString {
+			QString s = "0b";
+			for (int i = 7; i >= 0; i--)
+				s += (v & (1 << i)) ? '1' : '0';
+			return s;
+		};
+		auto toHex = [](uint8_t v) -> QString {
+			return QString("0x%1").arg(v, 2, 16, QChar('0'));
+		};
+
+		selWaveByte1BinLabel->setText(toBin(sel.byte1.value));
+		selWaveByte1HexLabel->setText(toHex(sel.byte1.value));
+		selWaveByte2BinLabel->setText(toBin(sel.byte2.value));
+		selWaveByte2HexLabel->setText(toHex(sel.byte2.value));
 	}
 
 	void onLoad() {
