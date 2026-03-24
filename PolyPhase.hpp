@@ -3,6 +3,7 @@
 #include "DataInterfaceBase.hpp"
 
 class PolyPhase : public DataInterfaceBase {
+	TapeIndex lastReturnedIndex = 0;
 	TapeIndex rewindIndex;
 	int lastBit = 0;
 
@@ -17,10 +18,18 @@ class PolyPhase : public DataInterfaceBase {
 		// look ahead .75 waveform to see what the value is there and record it
 		TapeIndex oneShotTriggerIndex = tapeIndex + .75 * samplesPerBit;
 
+		// if we rewind or seek to a new location, we have
+		// to set our previous bit to zero
+		if (startingIndex != lastReturnedIndex) {
+			lastBit = 0;
+		}
+
 		uint8_t resultBit = audio->Value(oneShotTriggerIndex) > hysterisis;
 
 		// see if we can re-sync exactly
-		if (lastBit == 1 && resultBit == 0) {
+		if (lastBit == 0 && resultBit == 0) {
+			tapeIndex = audio->FindNearestZeroCrossing(oneShotTriggerIndex, bitRate, hysterisis);
+		} else if (lastBit == 1 && resultBit == 0) {
 			// Closed loop:
 			//
 			// Here, due to the encoding, we guarantee that the following transition will
@@ -43,6 +52,7 @@ class PolyPhase : public DataInterfaceBase {
 		}
 
 		lastBit = resultBit;
+		lastReturnedIndex = tapeIndex;
 		return std::make_pair(tapeIndex, resultBit);
 	}
 
