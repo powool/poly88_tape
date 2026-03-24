@@ -478,7 +478,7 @@ class Record {
 		// --- Find leader and SOH ---
 		LeaderResult leaderResult;
 		try {
-			leaderResult = dec->FindEndOfNextLeader(idx, 10);
+			leaderResult = dec->FindEndOfNextLeader(idx, 3);
 		} catch (const AudioEOF &) {
 			scanStatus = ScanStatus::AudioEOF;
 			return {idx, ScanStatus::AudioEOF};
@@ -1037,7 +1037,10 @@ protected:
 	}
 
 	void mouseMoveEvent(QMouseEvent *event) override {
-		if (curveDragging && audio) {
+		if (selectionDragging && audio) {
+			double samp = pixelToSample(static_cast<int>(event->position().x()));
+			computeSelection(samp);
+		} else if (curveDragging && audio) {
 			// Curve drag: vertical mouse delta applies a smoothed offset
 			// to a range of samples centered on the click point
 			double dy = event->position().y() - curveDragStartY;
@@ -1079,10 +1082,12 @@ protected:
 			bool shift = event->modifiers() & Qt::ShiftModifier;
 
 			if (ctrl && audio) {
-				// Ctrl+click: set waveform selection start
+				// Ctrl+drag: set waveform selection start and begin drag
 				double clickSample = pixelToSample(
 					static_cast<int>(event->position().x()));
 				computeSelection(clickSample);
+				selectionDragging = true;
+				setCursor(Qt::SizeHorCursor);
 			} else if (shift && audio && xScale >= 2.0) {
 				// Curve drag mode: Shift+click when zoomed in enough
 				curveDragging = true;
@@ -1115,6 +1120,9 @@ protected:
 
 	void mouseReleaseEvent(QMouseEvent *event) override {
 		if (event->button() == Qt::LeftButton) {
+			if (selectionDragging) {
+				selectionDragging = false;
+			}
 			if (dragging) {
 				// Detect click vs drag: if mouse barely moved, treat as click
 				double dx = event->position().x() - dragStartX;
@@ -1176,6 +1184,73 @@ protected:
 		event->accept();
 	}
 
+	void keyPressEvent(QKeyEvent *event) override {
+		if (!audio || !selection.active) {
+			QWidget::keyPressEvent(event);
+			return;
+		}
+
+		Qt::KeyboardModifiers mods = event->modifiers() &
+			(Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier);
+		bool noMods = (mods == Qt::NoModifier);
+		bool ctrlOnly = (mods == Qt::ControlModifier);
+
+		auto scrollToFollow = [&](double idx) {
+			double px = sampleToPixel(idx);
+			if (px < 0 || px > width()) {
+				setScrollOffset(idx - visibleSamples() * 0.25);
+			}
+		};
+
+		if (event->key() == Qt::Key_Right && noMods) {
+			// Move selection to next zero crossing
+			try {
+				int newIdx = audio->FindThisOrNextZeroCrossing(
+					static_cast<int>(selection.startIndex) + 1);
+				computeSelection(static_cast<TapeIndex>(newIdx));
+				scrollToFollow(newIdx);
+			} catch (...) {}
+			event->accept();
+			return;
+		} else if (event->key() == Qt::Key_Left && noMods) {
+			// Move selection to previous zero crossing
+			if (selection.startIndex < 1) {
+				event->accept();
+				return;
+			}
+			try {
+				int newIdx = audio->FindThisOrPreviousZeroCrossing(
+					static_cast<int>(selection.startIndex) - 1);
+				computeSelection(static_cast<TapeIndex>(newIdx));
+				scrollToFollow(newIdx);
+			} catch (...) {}
+			event->accept();
+			return;
+		} else if (event->key() == Qt::Key_Right && ctrlOnly) {
+			// Move selection right by one byte boundary
+			TapeIndex newIdx = selection.byte1.endIndex;
+			computeSelection(newIdx);
+			scrollToFollow(newIdx);
+			event->accept();
+			return;
+		} else if (event->key() == Qt::Key_Left && ctrlOnly) {
+			// Move selection left by approximately one byte (samplesPerBit heuristic)
+			double samplesPerBit = (settings && settings->bitrate > 0)
+				? static_cast<double>(audio->SampleRate()) / settings->bitrate
+				: 40.0;
+			int delta = static_cast<int>(samplesPerBit * 8);
+			int newIdx = std::max(0, static_cast<int>(selection.startIndex) - delta);
+			try {
+				computeSelection(static_cast<TapeIndex>(newIdx));
+				scrollToFollow(newIdx);
+			} catch (...) {}
+			event->accept();
+			return;
+		}
+
+		QWidget::keyPressEvent(event);
+	}
+
 private slots:
 	void showContextMenu(const QPoint &pos) {
 		TapeIndex idx = pixelToSample(pos.x());
@@ -1226,8 +1301,9 @@ private slots:
 			for (auto &existing : file.GetRecords()) {
 				if (existing.GetSOHIndex() == sohIdx) {
 					emit statusMessage(QString(
-						"Duplicate record found at %1 (width %2) — "
-						"already exists in file %3")
+						"Duplicate record %1 found at %2 (width %3) — "
+						"already exists in file %4")
+						.arg(static_cast<qint64>(record.GetRecordNumber()))
 						.arg(static_cast<qint64>(sohIdx))
 						.arg(width)
 						.arg(QString::fromStdString(existing.GetName()).trimmed()));
@@ -1263,7 +1339,9 @@ private slots:
 		setScrollOffset(sohIdx > 0 ? sohIdx : idx);
 		update();
 		emit tapeDataChanged();
-		emit statusMessage(QString("New tape record found at %1 (width %2)")
+		emit statusMessage(QString("New %1 tape record %2 found at %3 (width %4)")
+			.arg(QString::fromStdString(record.GetName()).trimmed())
+			.arg(static_cast<qint64>(record.GetRecordNumber()))
 			.arg(static_cast<qint64>(sohIdx)).arg(width));
 	}
 
@@ -1351,8 +1429,9 @@ private:
 	double dragStartX = 0;
 	double dragStartY = 0;
 
-	// Waveform selection state (Ctrl+click)
+	// Waveform selection state (Ctrl+drag)
 	WaveformSelection selection;
+	bool selectionDragging = false;
 
 	// Curve drag editing state (Shift+click)
 	bool curveDragging = false;
