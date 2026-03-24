@@ -102,7 +102,7 @@ on the magnetic tape.
 Although we can get a fairly high sample rate, so we have good fidelity of the
 remaining signal, several kinds of noise appear to alter the signal.
 
-One is AC (alternnating current) related noise, which shows up as a 60Hz
+One is AC (alternating current) related noise, which shows up as a 60Hz
 or 120Hz wave overlaying the 4800Hz signal.
 
 Another is actual tape dropouts due to magnetic particles becoming
