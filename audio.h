@@ -58,6 +58,7 @@ class Audio {
 	int samplesPerSecond;
 	bool invertPhase;
 	int dcOffset = 0;
+	bool dirty = false;
 public:
 	Audio(const std::string &fileName);
 	void SetInvertPhase(bool invertPhase);
@@ -66,6 +67,8 @@ public:
 	int Negative(int index);
 
 	int16_t Value(int index);
+	void SetValue(int index, int16_t value);
+	bool IsDirty() const { return dirty; }
 
 	int SampleRate();
 	int SampleCount();
@@ -97,6 +100,9 @@ public:
 
 	void Dump(std::ostream &stream, int index, int count = 0);
 	std::pair<int, int> ScanForCarrier(int index, int hysterisis, int &bitRate);
+
+	// Write the current waveform data to a new WAV file
+	void WriteWAV(const std::string &fileName);
 };
 
 using AudioPtr = std::shared_ptr<Audio>;

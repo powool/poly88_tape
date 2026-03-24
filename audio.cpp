@@ -92,6 +92,16 @@ int16_t Audio::Value(int index) {
 	else return wavData[index] + dcOffset;
 }
 
+void Audio::SetValue(int index, int16_t value) {
+	if (index < 0 || index >= sampleCount) return;
+	if (invertPhase) {
+		wavData[index] = -(value + dcOffset);
+	} else {
+		wavData[index] = value - dcOffset;
+	}
+	dirty = true;
+}
+
 int Audio::SampleRate() { return samplesPerSecond; }
 
 int Audio::SampleCount() { return sampleCount; }
@@ -201,6 +211,45 @@ void Audio::Dump(std::ostream &stream, int index, int count) {
 		if (i < index + 3) stream << ", ";
 	}
 	stream << std::endl;
+}
+
+void Audio::WriteWAV(const std::string &fileName) {
+	std::ofstream out(fileName, std::ios::binary);
+	if (!out.good()) {
+		throw std::runtime_error("Cannot open file for writing: " + fileName);
+	}
+
+	uint32_t dataSize = sampleCount * sizeof(int16_t);
+	uint32_t fileSize = 36 + dataSize;  // 36 = header size minus 8
+
+	// RIFF header
+	out.write("RIFF", 4);
+	out.write(reinterpret_cast<const char *>(&fileSize), 4);
+	out.write("WAVE", 4);
+
+	// fmt chunk
+	out.write("fmt ", 4);
+	uint32_t chunkSize = 16;
+	out.write(reinterpret_cast<const char *>(&chunkSize), 4);
+	uint16_t audioFormat = 1;  // PCM
+	out.write(reinterpret_cast<const char *>(&audioFormat), 2);
+	uint16_t numChannels = 1;
+	out.write(reinterpret_cast<const char *>(&numChannels), 2);
+	uint32_t sampleRate = samplesPerSecond;
+	out.write(reinterpret_cast<const char *>(&sampleRate), 4);
+	uint32_t byteRate = samplesPerSecond * sizeof(int16_t);
+	out.write(reinterpret_cast<const char *>(&byteRate), 4);
+	uint16_t blockAlign = sizeof(int16_t);
+	out.write(reinterpret_cast<const char *>(&blockAlign), 2);
+	uint16_t bitsPerSample = 16;
+	out.write(reinterpret_cast<const char *>(&bitsPerSample), 2);
+
+	// data chunk
+	out.write("data", 4);
+	out.write(reinterpret_cast<const char *>(&dataSize), 4);
+	out.write(reinterpret_cast<const char *>(&wavData[0]), dataSize);
+
+	dirty = false;
 }
 
 std::pair<int, int> Audio::ScanForCarrier(int waveIndex, int hysterisis, int &bitRate)
