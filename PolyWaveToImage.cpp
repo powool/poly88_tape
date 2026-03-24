@@ -2681,18 +2681,19 @@ private slots:
 
 This program provides a means of examining and extracting digital data
 from audio tapes written using a circa 1976 PolyMorphic-88 S-100 computer.
-
+<br>
 The audio files are binary encoded from binary in two basic ways: Kansas City Standard
 and what they called Polyphase (which is just Manchester encoding).
-
+<br>
 To organize the data, each tape file is written as one or more records, each
 of which has a header, a header checksum, data, and a data checksum.
-
+<br>
 The goal is to be able to preserve these audiotapes in both formats, first
 by converting them from analog audio to mono 16 bit signed WAV files.
-
+<br>
 Once that is done, run this program, load that WAV file, and see what
 you can find on the tape!
+<br>
 
 <h3> Menus </h3>
 
@@ -2700,17 +2701,22 @@ Waveform context menu
 
 <ul>
 <li> <b> scan for record </b> attempts to find a new record starting at mouse position </li>
+<li> <b> scan all from here </b> (re)scans all records from this point on </li>
+<li> <b> scan for carrier </b> search for strings of 0's </li>
 </ul>
 
-
+<br>
+Scan for record is the one you want - the other two were bad experiments and
+will be removed.
 
 <h3> Mouse </h3>
 
 <ul>
-<li> <b> Control Mouse Wheel </b> change horizontal scale </li>
+<li> <b> Control Mouse Wheel </b> change horizontal scale (zoom in/out) </li>
 <li> <b> Shift Mouse Wheel </b> scroll left and right </li>
 <li> <b> Control-Shift Mouse Wheel </b> change vertical scale </li>
 <li> <b> Left Click drag </b> drag waveform left and right </li>
+<li> <b> Left Click </b> highlight and decode the next two bytes from the cursor position </li>
 <li> <b> Control Left Click </b> set selected waveform to that location and decode two bytes </li>
 <li> <b> Shift Left Click </b> drag waveform vertically (zoom in for this to work) </li>
 </ul>
