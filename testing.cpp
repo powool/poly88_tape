@@ -80,19 +80,19 @@ int main(int argc, char **argv)
 
 	DataInterfacePtr decoder;
 	if (useKansasCity) {
-		auto kansasCity = std::make_shared<KansasCity>(audio, bitRate, hysterisis);
-		if (debug > 1) {
-			kansasCity->SetDebugBit(true);
-		}
-
-		if (debug > 0) {
-			kansasCity->SetDebugByte(true);
-		}
-
-		decoder = kansasCity;
+		decoder = std::make_shared<KansasCity>(audio, bitRate, hysterisis);
 	} else {
 		decoder = std::make_shared<PolyPhase>(audio, bitRate, hysterisis);
 	}
+
+	if (debug > 1) {
+		decoder->SetDebugBit(true);
+	}
+
+	if (debug > 0) {
+		decoder->SetDebugByte(true);
+	}
+
 
 	std::cout << std::format("Samples: {}/{}s", audio->SampleCount(), audio->TimeOffset(audio->SampleCount())) << std::endl;
 	std::cout << std::format("Sample Rate: {} samples per second", audio->SampleRate()) << std::endl;

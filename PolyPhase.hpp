@@ -13,13 +13,14 @@ class PolyPhase : public DataInterfaceBase {
 	// The only time we know the next transition is exactly on a synthetic clock edge
 	// is on the 1->0 transition.
 	std::pair<TapeIndex, uint8_t> ReadBit(TapeIndex tapeIndex) {
+		TapeIndex startingIndex = tapeIndex;
 		// look ahead .75 waveform to see what the value is there and record it
 		TapeIndex oneShotTriggerIndex = tapeIndex + .75 * samplesPerBit;
 
-		uint8_t resultingBit = audio->Value(oneShotTriggerIndex) > hysterisis;
+		uint8_t resultBit = audio->Value(oneShotTriggerIndex) > hysterisis;
 
 		// see if we can re-sync exactly
-		if (lastBit == 1 && resultingBit == 0) {
+		if (lastBit == 1 && resultBit == 0) {
 			// Closed loop:
 			//
 			// Here, due to the encoding, we guarantee that the following transition will
@@ -30,8 +31,19 @@ class PolyPhase : public DataInterfaceBase {
 			tapeIndex += samplesPerBit;
 		}
 
-		lastBit = resultingBit;
-		return std::make_pair(tapeIndex, resultingBit);
+		if (debugBit) {
+			std::cout << std::format("{}-{}: {} ({}/{} samples):",
+				startingIndex,
+				tapeIndex,
+				resultBit, tapeIndex - startingIndex,
+				samplesPerBit
+				);
+			for (int i=0; i < tapeIndex - startingIndex; i++) { std::cout << std::format(" {},", audio->Value(startingIndex + i)); }
+			std::cout << std::endl;
+		}
+
+		lastBit = resultBit;
+		return std::make_pair(tapeIndex, resultBit);
 	}
 
     public:

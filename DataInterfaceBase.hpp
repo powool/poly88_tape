@@ -8,7 +8,9 @@ class DataInterfaceBase : public DataInterface {
 	int bitRate = 0;
 	int samplesPerBit = 0;
 	int hysterisis = 0;
-	int debug = false;
+
+	bool debugByte = false;
+	bool debugBit = false;
 
     public:
 	DataInterfaceBase(AudioPtr audio, int bitRate, int hysterisis) :
@@ -30,8 +32,13 @@ class DataInterfaceBase : public DataInterface {
 		for(int i = 0; i < leaderByteCount ; i++) {
 			readResult = ReadByte(tapeIndex);
 
-			if (debug) {
-				std::cout << std::format("{}-{}: got byte {:02x}", tapeIndex, readResult.first, readResult.second) << std::endl;
+			if (debugByte) {
+				std::cout << std::format(
+					"{}-{} ({}): ReadByte {:02x}",
+					tapeIndex,
+					readResult.first,
+					readResult.first - tapeIndex,
+					readResult.second) << std::endl;
 			}
 
 			if (readResult.second != 0xe6) {
@@ -60,4 +67,6 @@ class DataInterfaceBase : public DataInterface {
 
 		return readResult;
 	}
+	void SetDebugByte(bool d) { debugByte = d; }
+	void SetDebugBit(bool d) { debugBit = d; }
 };

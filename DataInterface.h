@@ -22,6 +22,9 @@ class DataInterface {
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.
 	virtual void TweakSettings()  = 0;
+
+	virtual void SetDebugByte(bool d) = 0;
+	virtual void SetDebugBit(bool d) = 0;
 };
 
 using DataInterfacePtr = std::shared_ptr<DataInterface>;
