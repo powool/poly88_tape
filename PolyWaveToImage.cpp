@@ -9,6 +9,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDialog>
@@ -35,17 +36,15 @@
 #include <QWidget>
 
 #include "audio.h"
-#include "PolyAudioTapeDecoder.hpp"
+#include "DataInterface.h"
+#include "PolyPhase.hpp"
+#include "KansasCity.hpp"
 
 // Wave file handler
 // bit finder
 // E6 finder
 // record finder/verifier
 // record spans a set of wave file indeces, allow interfactive editing or auto correction
-
-// TapeIndex is a double to allow for the fact that bits
-// won't always start at an integral sample index.
-using TapeIndex = double;
 
 struct TapeByte {
 	// WAV file index and length, in units of samples.
@@ -258,10 +257,16 @@ class Tape {
 // ---------------------------------------------------------------------------
 // MainWindowSettings - holds user-configurable settings
 // ---------------------------------------------------------------------------
+enum class TapeFormat {
+	PolyPhase = 0,
+	KansasCity = 1
+};
+
 struct MainWindowSettings {
 	bool booleanPlaceholder = false;
 	bool invertSignal = false;
 	uint32_t bitrate = 4800;
+	TapeFormat tapeFormat = TapeFormat::PolyPhase;
 };
 
 // ---------------------------------------------------------------------------
@@ -289,6 +294,12 @@ public:
 		bitrateSpin->setValue(static_cast<int>(settingsRef.bitrate));
 		layout->addRow("Bitrate", bitrateSpin);
 
+		tapeFormatCombo = new QComboBox(this);
+		tapeFormatCombo->addItem("Poly-88 Phase Encoding", static_cast<int>(TapeFormat::PolyPhase));
+		tapeFormatCombo->addItem("Kansas City Standard", static_cast<int>(TapeFormat::KansasCity));
+		tapeFormatCombo->setCurrentIndex(static_cast<int>(settingsRef.tapeFormat));
+		layout->addRow("Tape Format", tapeFormatCombo);
+
 		auto *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 		layout->addRow(buttons);
@@ -301,6 +312,7 @@ public:
 		settingsRef.booleanPlaceholder = booleanCheckBox->isChecked();
 		settingsRef.invertSignal = invertSignalCheckBox->isChecked();
 		settingsRef.bitrate = static_cast<uint32_t>(bitrateSpin->value());
+		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
 		QDialog::accept();
 	}
 
@@ -309,6 +321,7 @@ private:
 	QCheckBox *booleanCheckBox;
 	QCheckBox *invertSignalCheckBox;
 	QSpinBox *bitrateSpin;
+	QComboBox *tapeFormatCombo;
 };
 
 // ---------------------------------------------------------------------------
@@ -328,7 +341,7 @@ public:
 			this, &WaveformView::showContextMenu);
 	}
 
-	void setDecoder(std::shared_ptr<PolyAudioTapeDecoder> decoder) {
+	void setDecoder(DataInterfacePtr decoder) {
 		this->decoder = decoder;
 	}
 
@@ -539,15 +552,15 @@ private slots:
 	}
 
 	void ScanForRecord(TapeIndex idx) {
-		decoder->SetIndex(idx);
-		decoder->SetBitRate(4800);
+		if (!decoder) return;
 		try {
-			decoder->ReadRecord(true);
-		} catch (const ChecksumError &e) {
-			std::cerr << "decoder::ReadRecord threw exception " << e.what() << std::endl;
+			auto result = decoder->FindEndOfNextLeader(idx, 10);
+			idx = result.first;
+		} catch (const std::exception &e) {
+			std::cerr << "decoder::FindEndOfNextLeader threw exception " << e.what() << std::endl;
 		}
 
-		setScrollOffset(decoder->GetIndex());
+		setScrollOffset(idx);
 	}
 
 	void ScanForCarrier(TapeIndex idx) {
@@ -556,8 +569,8 @@ private slots:
 			auto result = audio->ScanForCarrier(idx, 200, bitRate);
 			// result.first is where we first found the carrier
 			idx = result.second;
-		} catch (const ChecksumError &e) {
-			std::cerr << "decoder::ReadRecord threw exception " << e.what() << std::endl;
+		} catch (const std::exception &e) {
+			std::cerr << "ScanForCarrier threw exception " << e.what() << std::endl;
 		}
 
 		setScrollOffset(idx);
@@ -572,7 +585,7 @@ private slots:
 	}
 
 private:
-	std::shared_ptr<PolyAudioTapeDecoder> decoder;
+	DataInterfacePtr decoder;
 	AudioPtr audio;
 	Tape *tape = nullptr;
 
@@ -904,6 +917,18 @@ private slots:
 		}
 	}
 
+	DataInterfacePtr createDecoder() {
+		if (!audioPtr) return nullptr;
+		int hysterisis = 200;
+		int bitrate = static_cast<int>(settings.bitrate);
+		if (settings.tapeFormat == TapeFormat::KansasCity) {
+			hysterisis = 0;
+			return std::make_shared<KansasCity>(audioPtr, bitrate, hysterisis);
+		} else {
+			return std::make_shared<PolyPhase>(audioPtr, bitrate, hysterisis);
+		}
+	}
+
 	void onLoad() {
 		QString fileName = QFileDialog::getOpenFileName(
 			this, "Open WAV File", QString(),
@@ -913,8 +938,7 @@ private slots:
 		try {
 			audioPtr = std::make_shared<Audio>(fileName.toStdString());
 			waveformView->setAudio(audioPtr);
-			auto decoder = std::make_shared<PolyAudioTapeDecoder>(audioPtr);
-			waveformView->setDecoder(decoder);
+			waveformView->setDecoder(createDecoder());
 			waveformView->setTape(&tape);
 			statusBar()->showMessage(
 				"Loaded: " + fileName +
@@ -934,8 +958,17 @@ private slots:
 	}
 
 	void onSettings() {
+		TapeFormat previousFormat = settings.tapeFormat;
 		SettingsDialog dlg(settings, this);
-		dlg.exec();
+		if (dlg.exec() == QDialog::Accepted) {
+			if (audioPtr && settings.tapeFormat != previousFormat) {
+				waveformView->setDecoder(createDecoder());
+				statusBar()->showMessage(
+					QString("Tape format changed to %1")
+					.arg(settings.tapeFormat == TapeFormat::KansasCity
+						? "Kansas City Standard" : "Poly-88 Phase Encoding"));
+			}
+		}
 	}
 
 	void onQuit() {
