@@ -80,6 +80,29 @@ class PolyPhase : public DataInterfaceBase {
 		return result;
 	}
 
+	BitReadResult ReadByteWithBits(TapeIndex tapeIndex) override {
+		BitReadResult result;
+		result.startIndex = tapeIndex;
+		uint8_t resultByte = 0;
+
+		for (auto i = 0; i < 8; i++) {
+			TapeIndex bitStart = tapeIndex;
+			auto bit = ReadBit(tapeIndex);
+			if (i == 1) {
+				rewindIndex = bit.first;
+			}
+			if (bit.second) {
+				resultByte |= (1 << i);
+			}
+			result.bits.push_back({ bitStart, bit.first, bit.second });
+			tapeIndex = bit.first;
+		}
+		result.endIndex = tapeIndex;
+		result.value = resultByte;
+		result.confident = true;
+		return result;
+	}
+
 	TapeIndex Rewind() {
 		lastBit = 0;
 		return rewindIndex;

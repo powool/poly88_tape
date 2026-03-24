@@ -174,6 +174,78 @@ class KansasCity : public DataInterfaceBase {
 		return std::make_pair(index, 0);
 	}
 
+	BitReadResult ReadByteWithBits(TapeIndex index) override {
+		BitReadResult result;
+		result.startIndex = index;
+
+		while (index < audio->SampleCount() - samplesPerBit * 12) {
+			TapeIndex ourIndex = index;
+
+			// Start bit (expect 0)
+			TapeIndex bitStart = ourIndex;
+			auto bit = ReadBit(ourIndex);
+			ourIndex = bit.first;
+
+			if (bit.second != 0) {
+				index = bit.first;
+				continue;
+			}
+
+			result.bits.clear();
+			result.startIndex = bitStart;
+			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+			rewindIndex = bit.first;
+
+			uint8_t resultByte = 0;
+			bool resync = false;
+			// 8 data bits
+			for (auto bitIndex = 0; bitIndex < 8; bitIndex++) {
+				bitStart = ourIndex;
+				bit = ReadBit(ourIndex);
+				ourIndex = bit.first;
+				if (bit.second == 1) {
+					resultByte |= 1 << bitIndex;
+				}
+				result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+			}
+
+			if (resync) {
+				index = bit.first;
+				continue;
+			}
+
+			// First stop bit (expect 1)
+			bitStart = ourIndex;
+			bit = ReadBit(ourIndex);
+			ourIndex = bit.first;
+			if (bit.second != 1) {
+				index = rewindIndex;
+				continue;
+			}
+			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+
+			// Second stop bit (expect 1)
+			bitStart = ourIndex;
+			bit = ReadBit(ourIndex);
+			ourIndex = bit.first;
+			if (bit.second != 1) {
+				index = rewindIndex;
+				continue;
+			}
+			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+
+			result.endIndex = ourIndex;
+			result.value = resultByte;
+			result.confident = true;
+			return result;
+		}
+
+		result.endIndex = index;
+		result.value = 0;
+		result.confident = false;
+		return result;
+	}
+
 	TapeIndex Rewind() {
 		// This returns the zero crossing at the end of what
 		// we thought was the stop bit.
