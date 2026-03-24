@@ -14,9 +14,11 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QMainWindow>
 #include <QMenu>
@@ -28,7 +30,9 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTableWidget>
 #include <QTextBrowser>
+#include <QTextEdit>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -46,15 +50,37 @@
 // record finder/verifier
 // record spans a set of wave file indeces, allow interfactive editing or auto correction
 
+enum class FieldType {
+	Leader,
+	SOH,
+	Name,
+	HeaderField,  // rcdL, rcdH, ln, addrL, addrH, type
+	HeaderChecksum,
+	Data,
+	DataChecksum
+};
+
 struct TapeByte {
 	// WAV file index and length, in units of samples.
-	TapeIndex startIndex, length;
+	TapeIndex startIndex = 0, length = 0;
 	// no value means exactly that - it is unknown
 	std::optional<uint8_t> value;
 	// override == true -> user or system overrode a value as
 	// a placeholder. Note: we might want to automatically consider
 	// them to be 0xE6, like the header.
-	bool override;
+	bool override = false;
+	FieldType fieldType = FieldType::Data;
+	bool confident = true;  // false if decoder reported low confidence
+	std::vector<BitInfo> bits;  // per-bit positional data from decoder
+};
+
+enum class ScanStatus {
+	Ok,
+	HeaderChecksumFail,
+	DataChecksumFail,
+	NoLeader,
+	NoSOH,
+	AudioEOF
 };
 
 class Record {
@@ -73,6 +99,8 @@ class Record {
 	std::vector<TapeByte> data;
 	TapeByte csData;
 
+	ScanStatus scanStatus = ScanStatus::NoLeader;
+
 	enum TapeType {
 		AbsoluteBinary = 0x00,
 		Comment = 0x01,
@@ -82,6 +110,62 @@ class Record {
 	};
 
     public:
+	ScanStatus GetScanStatus() const { return scanStatus; }
+
+	std::string GetTypeName() const {
+		if (!type.value) return "?";
+		switch (*(type.value)) {
+			case AbsoluteBinary: return "Binary";
+			case Comment:        return "Comment";
+			case End:            return "End";
+			case AutoExecute:    return "AutoExec";
+			case Data:           return "Data";
+			default:             return "Unknown";
+		}
+	}
+
+	uint16_t GetAddress() const {
+		if (addrL.value && addrH.value)
+			return static_cast<uint16_t>(*(addrL.value)) |
+			       (static_cast<uint16_t>(*(addrH.value)) << 8);
+		return 0;
+	}
+
+	uint16_t GetDataLength() const {
+		if (!ln.value) return 0;
+		return *(ln.value) == 0 ? 256 : *(ln.value);
+	}
+
+	std::string GetStatusString() const {
+		switch (scanStatus) {
+			case ScanStatus::Ok:                 return "OK";
+			case ScanStatus::HeaderChecksumFail: return "Hdr CS Fail";
+			case ScanStatus::DataChecksumFail:   return "Data CS Fail";
+			case ScanStatus::NoLeader:           return "No Leader";
+			case ScanStatus::NoSOH:              return "No SOH";
+			case ScanStatus::AudioEOF:           return "Audio EOF";
+			default:                             return "?";
+		}
+	}
+
+	// Generate a hex dump of the data bytes, 16 bytes per line
+	std::string GetHexDump() const {
+		std::string result;
+		uint16_t len = GetDataLength();
+		for (uint16_t i = 0; i < len && i < data.size(); i++) {
+			if (i > 0 && i % 16 == 0) result += "\n";
+			if (data[i].value) {
+				char buf[4];
+				snprintf(buf, sizeof(buf), "%02x ", *(data[i].value));
+				result += buf;
+			} else {
+				result += "?? ";
+			}
+			if ((i + 1) % 8 == 0 && (i + 1) % 16 != 0) result += " ";
+		}
+		return result;
+	}
+
 	TapeIndex GetStartIndex() {
 		if (leader.size() && leader[0].value) {
 			return leader[0].startIndex;
@@ -220,6 +304,129 @@ class Record {
 		if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return "csData";
 		return "";
 	}
+
+	// Read one byte from the decoder into a TapeByte
+	static TapeByte readOneByte(DataInterfacePtr dec, TapeIndex idx, FieldType ft) {
+		TapeByte tb;
+		tb.fieldType = ft;
+		auto result = dec->ReadByteWithBits(idx);
+		tb.startIndex = result.startIndex;
+		tb.length = result.endIndex - result.startIndex;
+		tb.value = result.value;
+		tb.confident = result.confident;
+		tb.bits = std::move(result.bits);
+		return tb;
+	}
+
+	// Populate this Record by decoding from the given DataInterface.
+	// leaderStart is the index at which to begin scanning for leader bytes.
+	// Returns {nextTapeIndex, status}.
+	std::pair<TapeIndex, ScanStatus> ReadFromDecoder(DataInterfacePtr dec, TapeIndex leaderStart) {
+		TapeIndex idx = leaderStart;
+
+		// --- Find leader and SOH ---
+		std::pair<TapeIndex, uint8_t> leaderResult;
+		try {
+			leaderResult = dec->FindEndOfNextLeader(idx, 10);
+		} catch (const AudioEOF &) {
+			scanStatus = ScanStatus::AudioEOF;
+			return {idx, ScanStatus::AudioEOF};
+		} catch (const std::exception &) {
+			scanStatus = ScanStatus::NoLeader;
+			return {idx, ScanStatus::NoLeader};
+		}
+
+		// We don't get individual leader byte positions from FindEndOfNextLeader,
+		// so record the leader region as a single TapeByte spanning the range.
+		{
+			TapeByte leaderByte;
+			leaderByte.fieldType = FieldType::Leader;
+			leaderByte.startIndex = leaderStart;
+			leaderByte.length = leaderResult.first - leaderStart;
+			leaderByte.value = 0xe6;
+			leader.push_back(leaderByte);
+		}
+
+		// leaderResult contains the first non-0xe6 byte (should be SOH)
+		soh.fieldType = FieldType::SOH;
+		soh.startIndex = leaderResult.first;
+		soh.value = leaderResult.second;
+		// We need the end of the SOH byte to compute its length and get next idx
+		// The SOH was already read by FindEndOfNextLeader, but we don't have
+		// the end position. Read one more byte to get the boundary, then use
+		// that byte as the first header byte.
+		// Actually, leaderResult.first IS the next index after the SOH byte was read.
+		// Looking at DataInterfaceBase::FindEndOfNextLeader — it returns readResult
+		// which is the pair from ReadByte, so .first is the index AFTER the byte.
+		// But the byte value is .second. So leaderResult.first is the next read position.
+
+		// We need the start of the SOH byte. FindEndOfNextLeader reads leader bytes
+		// and then reads the first non-leader byte. The returned .first is the
+		// position after that byte. So SOH start = leaderResult.first - one byte width.
+		// We don't know the exact byte width, so we'll estimate from the leader region.
+		// Better approach: just set soh length to 0 for now and start reading header
+		// from leaderResult.first.
+		soh.length = 0;  // we don't have exact SOH boundaries from FindEndOfNextLeader
+		idx = leaderResult.first;
+
+		if (leaderResult.second != 0x01) {
+			scanStatus = ScanStatus::NoSOH;
+			return {idx, ScanStatus::NoSOH};
+		}
+
+		// --- Read header fields ---
+		try {
+			for (int i = 0; i < 8; i++) {
+				name[i] = readOneByte(dec, idx, FieldType::Name);
+				idx = name[i].startIndex + name[i].length;
+			}
+			rcdL = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = rcdL.startIndex + rcdL.length;
+			rcdH = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = rcdH.startIndex + rcdH.length;
+			ln = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = ln.startIndex + ln.length;
+			addrL = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = addrL.startIndex + addrL.length;
+			addrH = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = addrH.startIndex + addrH.length;
+			type = readOneByte(dec, idx, FieldType::HeaderField);
+			idx = type.startIndex + type.length;
+			csHeader = readOneByte(dec, idx, FieldType::HeaderChecksum);
+			idx = csHeader.startIndex + csHeader.length;
+		} catch (const AudioEOF &) {
+			scanStatus = ScanStatus::AudioEOF;
+			return {idx, ScanStatus::AudioEOF};
+		}
+
+		if (!HeaderChecksumIsValid()) {
+			scanStatus = ScanStatus::HeaderChecksumFail;
+			return {idx, ScanStatus::HeaderChecksumFail};
+		}
+
+		// --- Read data bytes ---
+		uint16_t dataLength = ln.value ? (*(ln.value) == 0 ? 256 : *(ln.value)) : 0;
+		try {
+			data.resize(dataLength);
+			for (uint16_t i = 0; i < dataLength; i++) {
+				data[i] = readOneByte(dec, idx, FieldType::Data);
+				idx = data[i].startIndex + data[i].length;
+			}
+			csData = readOneByte(dec, idx, FieldType::DataChecksum);
+			idx = csData.startIndex + csData.length;
+		} catch (const AudioEOF &) {
+			scanStatus = ScanStatus::AudioEOF;
+			return {idx, ScanStatus::AudioEOF};
+		}
+
+		if (!DataChecksumIsValid()) {
+			scanStatus = ScanStatus::DataChecksumFail;
+			return {idx, ScanStatus::DataChecksumFail};
+		}
+
+		scanStatus = ScanStatus::Ok;
+		return {idx, ScanStatus::Ok};
+	}
 };
 
 class File {
@@ -267,6 +474,9 @@ struct MainWindowSettings {
 	bool invertSignal = false;
 	uint32_t bitrate = 4800;
 	TapeFormat tapeFormat = TapeFormat::PolyPhase;
+	// Curve drag interpolation range, as a fraction of one bit-cell cycle.
+	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
+	double curveDragRange = 0.25;
 };
 
 // ---------------------------------------------------------------------------
@@ -300,6 +510,14 @@ public:
 		tapeFormatCombo->setCurrentIndex(static_cast<int>(settingsRef.tapeFormat));
 		layout->addRow("Tape Format", tapeFormatCombo);
 
+		curveDragRangeSpin = new QDoubleSpinBox(this);
+		curveDragRangeSpin->setRange(0.05, 1.0);
+		curveDragRangeSpin->setSingleStep(0.05);
+		curveDragRangeSpin->setDecimals(2);
+		curveDragRangeSpin->setValue(settingsRef.curveDragRange);
+		curveDragRangeSpin->setSuffix(" cycles");
+		layout->addRow("Curve Drag Range", curveDragRangeSpin);
+
 		auto *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 		layout->addRow(buttons);
@@ -313,6 +531,7 @@ public:
 		settingsRef.invertSignal = invertSignalCheckBox->isChecked();
 		settingsRef.bitrate = static_cast<uint32_t>(bitrateSpin->value());
 		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
+		settingsRef.curveDragRange = curveDragRangeSpin->value();
 		QDialog::accept();
 	}
 
@@ -322,6 +541,7 @@ private:
 	QCheckBox *invertSignalCheckBox;
 	QSpinBox *bitrateSpin;
 	QComboBox *tapeFormatCombo;
+	QDoubleSpinBox *curveDragRangeSpin;
 };
 
 // ---------------------------------------------------------------------------
@@ -355,6 +575,10 @@ public:
 	void setTape(Tape *t) {
 		tape = t;
 		update();
+	}
+
+	void setSettings(const MainWindowSettings *s) {
+		settings = s;
 	}
 
 	AudioPtr getAudio() const { return audio; }
@@ -395,6 +619,7 @@ public:
 signals:
 	void mouseSampleChanged(double sampleIndex);
 	void scrollChanged();
+	void tapeDataChanged();
 
 protected:
 	void paintEvent(QPaintEvent *) override {
@@ -445,35 +670,160 @@ protected:
 			prevY = screenY;
 			first = false;
 		}
+		// Draw sample points when zoomed in enough for editing
+		if (xScale >= 2.0) {
+			p.setBrush(QColor(255, 255, 100));
+			p.setPen(Qt::NoPen);
+			for (int px = 0; px < w; px++) {
+				double sampleIdx = pixelToSample(px);
+				int idx = static_cast<int>(std::round(sampleIdx));
+				if (idx < 0 || idx >= count) continue;
+				// Only draw if this sample maps near this pixel
+				double expectedPx = sampleToPixel(idx);
+				if (std::abs(expectedPx - px) > 0.5 * xScale) continue;
+				int sy = sampleToY(audio->Value(idx));
+				int dotR = (xScale >= 5.0) ? 3 : 2;
+				p.drawEllipse(QPointF(expectedPx, sy), dotR, dotR);
+			}
+		}
 		p.setRenderHint(QPainter::Antialiasing, false);
 
 		// Draw TapeByte tick marks on the X axis
 		drawByteTickMarks(p, w, h);
+
+		// Draw per-bit tick marks when zoomed in enough
+		drawBitTickMarks(p, w, h);
+	}
+
+	static QColor colorForFieldType(FieldType ft) {
+		switch (ft) {
+			case FieldType::Leader:         return QColor(128, 128, 128); // gray
+			case FieldType::SOH:            return QColor(255, 255, 0);   // yellow
+			case FieldType::Name:           return QColor(0, 200, 255);   // cyan
+			case FieldType::HeaderField:    return QColor(100, 100, 255); // blue
+			case FieldType::HeaderChecksum: return QColor(255, 165, 0);   // orange
+			case FieldType::Data:           return QColor(0, 200, 0);     // green
+			case FieldType::DataChecksum:   return QColor(255, 165, 0);   // orange
+			default:                        return QColor(200, 200, 200);
+		}
 	}
 
 	void drawByteTickMarks(QPainter &p, int w, int h) {
 		if (!tape) return;
 
-		p.setPen(QColor(100, 100, 255));
-		int tickTop = h - 20;
-		int tickBot = h - 5;
+		int tickTopNormal = h - 16;
+		int tickTopTall = h - 28;
+		int tickBot = h - 2;
 
 		for (auto &file : tape->GetFiles()) {
 			for (auto &record : file.GetRecords()) {
+				// Draw a tall white tick at the record start
+				double recStartPx = sampleToPixel(record.GetStartIndex());
+				if (recStartPx >= -1 && recStartPx <= w + 1) {
+					p.setPen(QPen(Qt::white, 2));
+					int ipx = static_cast<int>(recStartPx);
+					p.drawLine(ipx, tickTopTall, ipx, tickBot);
+				}
+
 				auto allBytes = record.GetAllBytes();
 				for (auto *tb : allBytes) {
 					if (tb->length <= 0) continue;
 					double px = sampleToPixel(tb->startIndex);
 					if (px < -1 || px > w + 1) continue;
 					int ipx = static_cast<int>(px);
-					p.drawLine(ipx, tickTop, ipx, tickBot);
+
+					// Red override for low-confidence bytes
+					QColor color = tb->confident
+						? colorForFieldType(tb->fieldType)
+						: QColor(255, 0, 0);
+					p.setPen(color);
+
+					// Taller ticks for SOH, header checksum, data checksum,
+					// or low-confidence bytes
+					bool isBoundary = (!tb->confident ||
+					                   tb->fieldType == FieldType::SOH ||
+					                   tb->fieldType == FieldType::HeaderChecksum ||
+					                   tb->fieldType == FieldType::DataChecksum);
+					int top = isBoundary ? tickTopTall : tickTopNormal;
+					p.drawLine(ipx, top, ipx, tickBot);
+				}
+			}
+		}
+	}
+
+	void drawBitTickMarks(QPainter &p, int w, int h) {
+		if (!tape || !settings) return;
+
+		// Only draw bit ticks when zoomed in enough that individual bits
+		// span at least ~1.5 pixels
+		double samplesPerBit = static_cast<double>(
+			settings->bitrate > 0 ? (192000.0 / settings->bitrate) : 40);
+		if (audio) {
+			samplesPerBit = static_cast<double>(audio->SampleRate()) / settings->bitrate;
+		}
+		if (xScale * samplesPerBit < 1.5) return;
+
+		int bitTickTop = h - 8;
+		int bitTickBot = h - 2;
+
+		for (auto &file : tape->GetFiles()) {
+			for (auto &record : file.GetRecords()) {
+				auto allBytes = record.GetAllBytes();
+				for (auto *tb : allBytes) {
+					if (tb->bits.empty()) continue;
+
+					QColor color = tb->confident
+						? colorForFieldType(tb->fieldType)
+						: QColor(255, 0, 0);
+					color.setAlpha(120);
+					p.setPen(color);
+
+					// Skip the first bit (its boundary = the byte boundary already drawn)
+					for (size_t b = 1; b < tb->bits.size(); b++) {
+						double px = sampleToPixel(tb->bits[b].startIndex);
+						if (px < -1 || px > w + 1) continue;
+						int ipx = static_cast<int>(px);
+						p.drawLine(ipx, bitTickTop, ipx, bitTickBot);
+					}
 				}
 			}
 		}
 	}
 
 	void mouseMoveEvent(QMouseEvent *event) override {
-		if (dragging) {
+		if (editing && editSampleIndex >= 0 && audio) {
+			// Point edit: drag vertically to change single sample value
+			int midY = height() / 2;
+			double py = event->position().y();
+			double val = (midY - py) / (yScale * midY / 32768.0);
+			val = std::clamp(val, -32768.0, 32767.0);
+			audio->SetValue(editSampleIndex, static_cast<int16_t>(val));
+			update();
+		} else if (curveDragging && audio) {
+			// Curve drag: vertical mouse delta applies a smoothed offset
+			// to a range of samples centered on the click point
+			double dy = event->position().y() - curveDragStartY;
+			double deltaVal = -dy / (yScale * (height() / 2.0) / 32768.0);
+
+			int radius = curveRangeEnd - curveRangeStart;
+			int center = curveCenterSample - curveRangeStart;
+
+			for (int i = 0; i < radius; i++) {
+				int sIdx = curveRangeStart + i;
+				if (sIdx < 0 || sIdx >= audio->SampleCount()) continue;
+
+				// Raised-cosine (Hann) window centered on the click point
+				double t = static_cast<double>(i - center) / (radius / 2.0);
+				double weight = (std::abs(t) <= 1.0)
+					? 0.5 * (1.0 + std::cos(M_PI * t))
+					: 0.0;
+
+				double newVal = curveOriginalValues[i] + deltaVal * weight;
+				newVal = std::clamp(newVal, -32768.0, 32767.0);
+				audio->SetValue(sIdx, static_cast<int16_t>(newVal));
+			}
+			update();
+		} else if (dragging) {
 			double dx = event->position().x() - dragLastX;
 			setScrollOffset(scrollOffset - dx / xScale);
 			dragLastX = event->position().x();
@@ -487,15 +837,59 @@ protected:
 
 	void mousePressEvent(QMouseEvent *event) override {
 		if (event->button() == Qt::LeftButton) {
-			dragging = true;
-			dragLastX = event->position().x();
-			setCursor(Qt::ClosedHandCursor);
+			bool ctrl = event->modifiers() & Qt::ControlModifier;
+			bool shift = event->modifiers() & Qt::ShiftModifier;
+
+			if (ctrl && audio && xScale >= 2.0) {
+				// Point edit mode: Ctrl+click when zoomed in enough
+				editing = true;
+				editSampleIndex = static_cast<int>(std::round(
+					pixelToSample(static_cast<int>(event->position().x()))));
+				if (editSampleIndex < 0 || editSampleIndex >= audio->SampleCount()) {
+					editing = false;
+					editSampleIndex = -1;
+				} else {
+					setCursor(Qt::CrossCursor);
+				}
+			} else if (shift && audio && xScale >= 2.0) {
+				// Curve drag mode: Shift+click when zoomed in enough
+				curveDragging = true;
+				curveCenterSample = static_cast<int>(std::round(
+					pixelToSample(static_cast<int>(event->position().x()))));
+				curveDragStartY = event->position().y();
+
+				int radius = curveDragRadius();
+				curveRangeStart = std::max(0, curveCenterSample - radius);
+				curveRangeEnd = std::min(audio->SampleCount(),
+					curveCenterSample + radius);
+
+				// Snapshot original values in the range
+				int rangeLen = curveRangeEnd - curveRangeStart;
+				curveOriginalValues.resize(rangeLen);
+				for (int i = 0; i < rangeLen; i++) {
+					curveOriginalValues[i] = audio->Value(curveRangeStart + i);
+				}
+				setCursor(Qt::SizeVerCursor);
+			} else {
+				dragging = true;
+				dragLastX = event->position().x();
+				setCursor(Qt::ClosedHandCursor);
+			}
 		}
 		QWidget::mousePressEvent(event);
 	}
 
 	void mouseReleaseEvent(QMouseEvent *event) override {
 		if (event->button() == Qt::LeftButton) {
+			if (editing) {
+				editing = false;
+				editSampleIndex = -1;
+			}
+			if (curveDragging) {
+				curveDragging = false;
+				curveCenterSample = -1;
+				curveOriginalValues.clear();
+			}
 			dragging = false;
 			setCursor(Qt::ArrowCursor);
 		}
@@ -535,12 +929,16 @@ private slots:
 		QMenu contextMenu(this);
 
 		QAction *scanForRecordAction = contextMenu.addAction("Scan For Record");
+		QAction *scanAllFromHereAction = contextMenu.addAction("Scan All From Here");
 		QAction *scanForCarrierAction = contextMenu.addAction("Scan For Carrier");
+		contextMenu.addSeparator();
 		QAction *dataAction = contextMenu.addAction("Data");
 		QAction *waveformAction = contextMenu.addAction("Waveform");
 
 		connect(scanForRecordAction, &QAction::triggered, this,
 			[this, idx]() { ScanForRecord(idx); });
+		connect(scanAllFromHereAction, &QAction::triggered, this,
+			[this, idx]() { ScanAllFromHere(idx); });
 		connect(scanForCarrierAction, &QAction::triggered, this,
 			[this, idx]() { ScanForCarrier(idx); });
 		connect(dataAction, &QAction::triggered, this,
@@ -552,15 +950,84 @@ private slots:
 	}
 
 	void ScanForRecord(TapeIndex idx) {
-		if (!decoder) return;
-		try {
-			auto result = decoder->FindEndOfNextLeader(idx, 10);
-			idx = result.first;
-		} catch (const std::exception &e) {
-			std::cerr << "decoder::FindEndOfNextLeader threw exception " << e.what() << std::endl;
+		if (!decoder || !tape) return;
+
+		Record record;
+		auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
+
+		if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
+			std::cerr << "ScanForRecord: no record found from index " << idx << std::endl;
+			return;
 		}
 
-		setScrollOffset(idx);
+		// Insert the record into the tape, grouped by file name
+		std::string recName = record.GetName();
+		File *targetFile = nullptr;
+		for (auto &file : tape->GetFiles()) {
+			if (file.GetRecords().size() &&
+				file.GetRecords()[0].GetName() == recName) {
+				targetFile = &file;
+				break;
+			}
+		}
+		if (!targetFile) {
+			tape->GetFiles().emplace_back();
+			targetFile = &tape->GetFiles().back();
+		}
+		TapeIndex recordStart = record.GetStartIndex();
+		targetFile->GetRecords().push_back(std::move(record));
+
+		// Scroll to the start of the record
+		setScrollOffset(recordStart > 0 ? recordStart : idx);
+		update();
+		emit tapeDataChanged();
+	}
+
+	void ScanAllFromHere(TapeIndex idx) {
+		if (!decoder || !tape || !audio) return;
+
+		// Remove existing records whose start index is >= idx
+		for (auto &file : tape->GetFiles()) {
+			auto &recs = file.GetRecords();
+			recs.erase(
+				std::remove_if(recs.begin(), recs.end(),
+					[idx](Record &r) { return r.GetStartIndex() >= idx; }),
+				recs.end());
+		}
+		// Remove empty files
+		auto &files = tape->GetFiles();
+		files.erase(
+			std::remove_if(files.begin(), files.end(),
+				[](File &f) { return f.GetRecords().empty(); }),
+			files.end());
+
+		// Scan from idx until EOF
+		std::string currentFileName;
+		File *currentFile = files.empty() ? nullptr : &files.back();
+		if (currentFile && currentFile->GetRecords().size()) {
+			currentFileName = currentFile->GetRecords()[0].GetName();
+		}
+
+		while (idx < audio->SampleCount()) {
+			Record record;
+			auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
+
+			if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
+				break;
+			}
+
+			std::string recName = record.GetName();
+			if (!currentFile || recName != currentFileName) {
+				files.emplace_back();
+				currentFile = &files.back();
+				currentFileName = recName;
+			}
+			currentFile->GetRecords().push_back(std::move(record));
+			idx = nextIdx;
+		}
+
+		update();
+		emit tapeDataChanged();
 	}
 
 	void ScanForCarrier(TapeIndex idx) {
@@ -588,6 +1055,7 @@ private:
 	DataInterfacePtr decoder;
 	AudioPtr audio;
 	Tape *tape = nullptr;
+	const MainWindowSettings *settings = nullptr;
 
 	double xScale = 0.05;   // pixels per sample (start zoomed out)
 	double yScale = 1.0;
@@ -595,6 +1063,26 @@ private:
 
 	bool dragging = false;
 	double dragLastX = 0;
+
+	// Point editing state (Ctrl+click)
+	bool editing = false;
+	int editSampleIndex = -1;
+
+	// Curve drag editing state (Shift+click)
+	bool curveDragging = false;
+	int curveCenterSample = -1;
+	double curveDragStartY = 0;      // mouse Y at drag start
+	std::vector<int16_t> curveOriginalValues;  // original sample values in the affected range
+	int curveRangeStart = 0;          // first sample index in the range
+	int curveRangeEnd = 0;            // one past last sample index
+
+	// Compute the interpolation radius in samples from settings
+	int curveDragRadius() const {
+		if (!settings || !audio) return 5;
+		double samplesPerBit = static_cast<double>(audio->SampleRate()) / settings->bitrate;
+		double radius = samplesPerBit * settings->curveDragRange;
+		return std::max(1, static_cast<int>(std::round(radius)));
+	}
 };
 
 // ---------------------------------------------------------------------------
@@ -634,7 +1122,8 @@ private:
 	QLabel *recordNumberLabel = nullptr;
 	QLabel *byteLabel = nullptr;
 	QLabel *validityLabel = nullptr;
-	QWidget *bottomPlaceholder = nullptr;
+	QTableWidget *recordTable = nullptr;
+	QTextEdit *hexDetailView = nullptr;
 
 	bool updatingScrollBar = false;
 
@@ -667,6 +1156,13 @@ private:
 		quitAction->setShortcut(QKeySequence("Ctrl+Q"));
 		connect(quitAction, &QAction::triggered, this, &MainWindow::onQuit);
 
+		// --- Scan menu ---
+		QMenu *scanMenu = menuBar()->addMenu("&Scan");
+
+		QAction *scanAllAction = scanMenu->addAction("Scan &All Records");
+		scanAllAction->setShortcut(QKeySequence("Ctrl+A"));
+		connect(scanAllAction, &QAction::triggered, this, &MainWindow::onScanAll);
+
 		// --- Help menu ---
 		QMenu *helpMenu = menuBar()->addMenu("&Help");
 
@@ -698,6 +1194,7 @@ private:
 
 		waveformView = new WaveformView(topWidget);
 		waveformView->setMinimumHeight(200);
+		waveformView->setSettings(&settings);
 		topLayout->addWidget(waveformView, 1);
 
 		// Scrollbar row with left/right buttons
@@ -753,6 +1250,8 @@ private:
 			this, &MainWindow::onScrollBarChanged);
 		connect(waveformView, &WaveformView::mouseSampleChanged,
 			this, &MainWindow::onMouseSampleChanged);
+		connect(waveformView, &WaveformView::tapeDataChanged,
+			this, &MainWindow::refreshRecordTable);
 
 		// --- Middle pane: status labels ---
 		auto *middleWidget = new QWidget(splitter);
@@ -784,21 +1283,57 @@ private:
 		middleLayout->addStretch();
 		middleWidget->setMaximumHeight(40);
 
-		// --- Bottom pane: placeholder ---
-		bottomPlaceholder = new QWidget(splitter);
-		auto *bottomLayout = new QVBoxLayout(bottomPlaceholder);
-		auto *placeholderLabel = new QLabel(
-			"Tape files / records / byte layout will appear here",
-			bottomPlaceholder);
-		placeholderLabel->setAlignment(Qt::AlignCenter);
-		placeholderLabel->setStyleSheet("color: gray;");
-		bottomLayout->addWidget(placeholderLabel);
-		bottomPlaceholder->setMinimumHeight(100);
+		// --- Bottom pane: record table + hex detail ---
+		auto *bottomWidget = new QWidget(splitter);
+		auto *bottomOuterLayout = new QVBoxLayout(bottomWidget);
+		bottomOuterLayout->setContentsMargins(0, 0, 0, 0);
+		bottomOuterLayout->setSpacing(2);
+
+		auto *bottomSplitter = new QSplitter(Qt::Horizontal, bottomWidget);
+
+		// Record table
+		recordTable = new QTableWidget(0, 9, bottomSplitter);
+		recordTable->setHorizontalHeaderLabels({
+			"File", "Rec#", "Type", "Addr", "Length",
+			"Hdr CS", "Data CS", "Start", "Status"
+		});
+		recordTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+		recordTable->setSelectionMode(QAbstractItemView::SingleSelection);
+		recordTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+		recordTable->horizontalHeader()->setStretchLastSection(true);
+		recordTable->verticalHeader()->setDefaultSectionSize(20);
+		recordTable->setAlternatingRowColors(true);
+		recordTable->setStyleSheet(
+			"QTableWidget { background-color: #1e1e1e; color: #d4d4d4; "
+			"  alternate-background-color: #252525; gridline-color: #333; }"
+			"QTableWidget::item:selected { background-color: #264f78; }"
+			"QHeaderView::section { background-color: #2d2d2d; color: #d4d4d4; "
+			"  border: 1px solid #333; padding: 2px; }"
+		);
+
+		connect(recordTable, &QTableWidget::cellClicked,
+			this, &MainWindow::onRecordTableClicked);
+
+		// Hex detail view
+		hexDetailView = new QTextEdit(bottomSplitter);
+		hexDetailView->setReadOnly(true);
+		hexDetailView->setFont(QFont("Monospace", 9));
+		hexDetailView->setStyleSheet(
+			"QTextEdit { background-color: #1e1e1e; color: #d4d4d4; }"
+		);
+
+		bottomSplitter->addWidget(recordTable);
+		bottomSplitter->addWidget(hexDetailView);
+		bottomSplitter->setStretchFactor(0, 3);
+		bottomSplitter->setStretchFactor(1, 2);
+
+		bottomOuterLayout->addWidget(bottomSplitter);
+		bottomWidget->setMinimumHeight(100);
 
 		// Set splitter proportions
 		splitter->addWidget(topWidget);
 		splitter->addWidget(middleWidget);
-		splitter->addWidget(bottomPlaceholder);
+		splitter->addWidget(bottomWidget);
 		splitter->setStretchFactor(0, 5);
 		splitter->setStretchFactor(1, 0);
 		splitter->setStretchFactor(2, 2);
@@ -929,6 +1464,87 @@ private slots:
 		}
 	}
 
+	void refreshRecordTable() {
+		if (!recordTable) return;
+		recordTable->setRowCount(0);
+
+		int row = 0;
+		for (auto &file : tape.GetFiles()) {
+			for (auto &record : file.GetRecords()) {
+				recordTable->insertRow(row);
+
+				auto setItem = [&](int col, const QString &text) {
+					auto *item = new QTableWidgetItem(text);
+					item->setTextAlignment(Qt::AlignCenter);
+					recordTable->setItem(row, col, item);
+				};
+
+				setItem(0, QString::fromStdString(record.GetName()));
+				setItem(1, QString::number(record.GetRecordNumber()));
+				setItem(2, QString::fromStdString(record.GetTypeName()));
+				setItem(3, QString("0x%1").arg(record.GetAddress(), 4, 16, QChar('0')));
+				setItem(4, QString::number(record.GetDataLength()));
+
+				bool hdrOk = record.HeaderChecksumIsValid();
+				bool dataOk = record.DataChecksumIsValid();
+				ScanStatus st = record.GetScanStatus();
+
+				auto *hdrItem = new QTableWidgetItem(hdrOk ? "✓" : "✗");
+				hdrItem->setTextAlignment(Qt::AlignCenter);
+				hdrItem->setForeground(hdrOk ? QColor(0, 200, 0) : QColor(255, 80, 80));
+				recordTable->setItem(row, 5, hdrItem);
+
+				auto *dataItem = new QTableWidgetItem(dataOk ? "✓" : "✗");
+				dataItem->setTextAlignment(Qt::AlignCenter);
+				dataItem->setForeground(dataOk ? QColor(0, 200, 0) : QColor(255, 80, 80));
+				recordTable->setItem(row, 6, dataItem);
+
+				setItem(7, QString::number(static_cast<qint64>(record.GetStartIndex())));
+
+				auto *statusItem = new QTableWidgetItem(
+					QString::fromStdString(record.GetStatusString()));
+				statusItem->setTextAlignment(Qt::AlignCenter);
+				if (st == ScanStatus::Ok) {
+					statusItem->setForeground(QColor(0, 200, 0));
+				} else {
+					statusItem->setForeground(QColor(255, 80, 80));
+				}
+				recordTable->setItem(row, 8, statusItem);
+
+				row++;
+			}
+		}
+		recordTable->resizeColumnsToContents();
+	}
+
+	void onRecordTableClicked(int row, int /*col*/) {
+		// Find the record at this row index
+		int idx = 0;
+		for (auto &file : tape.GetFiles()) {
+			for (auto &record : file.GetRecords()) {
+				if (idx == row) {
+					waveformView->setScrollOffset(record.GetStartIndex());
+
+					// Show hex detail
+					if (hexDetailView) {
+						QString detail;
+						detail += QString("<b>%1</b> Record %2  Type: %3  Addr: 0x%4  Len: %5  Status: %6<br><br>")
+							.arg(QString::fromStdString(record.GetName()).trimmed())
+							.arg(record.GetRecordNumber())
+							.arg(QString::fromStdString(record.GetTypeName()))
+							.arg(record.GetAddress(), 4, 16, QChar('0'))
+							.arg(record.GetDataLength())
+							.arg(QString::fromStdString(record.GetStatusString()));
+						detail += "<pre>" + QString::fromStdString(record.GetHexDump()) + "</pre>";
+						hexDetailView->setHtml(detail);
+					}
+					return;
+				}
+				idx++;
+			}
+		}
+	}
+
 	void onLoad() {
 		QString fileName = QFileDialog::getOpenFileName(
 			this, "Open WAV File", QString(),
@@ -954,7 +1570,26 @@ private slots:
 	}
 
 	void Save() {
-		QMessageBox::information(this, "Save", "Save is not yet implemented.");
+		if (!audioPtr) {
+			QMessageBox::warning(this, "Save", "No audio file loaded.");
+			return;
+		}
+		if (!audioPtr->IsDirty()) {
+			QMessageBox::information(this, "Save", "No changes to save.");
+			return;
+		}
+		QString fileName = QFileDialog::getSaveFileName(
+			this, "Save WAV File", QString(),
+			"WAV files (*.wav);;All files (*)");
+		if (fileName.isEmpty()) return;
+
+		try {
+			audioPtr->WriteWAV(fileName.toStdString());
+			statusBar()->showMessage("Saved: " + fileName);
+		} catch (const std::exception &e) {
+			QMessageBox::critical(this, "Error saving file",
+				QString::fromStdString(e.what()));
+		}
 	}
 
 	void onSettings() {
@@ -969,6 +1604,61 @@ private slots:
 						? "Kansas City Standard" : "Poly-88 Phase Encoding"));
 			}
 		}
+	}
+
+	void onScanAll() {
+		if (!audioPtr) {
+			QMessageBox::warning(this, "Scan", "No audio file loaded.");
+			return;
+		}
+
+		// Clear existing tape data
+		tape.GetFiles().clear();
+
+		DataInterfacePtr dec = createDecoder();
+		TapeIndex idx = 0;
+		int recordCount = 0;
+		int errorCount = 0;
+		std::string currentFileName;
+		File *currentFile = nullptr;
+
+		while (idx < audioPtr->SampleCount()) {
+			Record record;
+			auto [nextIdx, status] = record.ReadFromDecoder(dec, idx);
+
+			if (status == ScanStatus::AudioEOF) {
+				break;
+			}
+
+			if (status == ScanStatus::NoLeader) {
+				// Could not find leader at all — we're done
+				break;
+			}
+
+			recordCount++;
+
+			// Group records into Files by name continuity
+			std::string recName = record.GetName();
+			if (!currentFile || recName != currentFileName) {
+				tape.GetFiles().emplace_back();
+				currentFile = &tape.GetFiles().back();
+				currentFileName = recName;
+			}
+			currentFile->GetRecords().push_back(std::move(record));
+
+			if (status != ScanStatus::Ok) {
+				errorCount++;
+			}
+
+			idx = nextIdx;
+		}
+
+		waveformView->setTape(&tape);
+		waveformView->update();
+		refreshRecordTable();
+		statusBar()->showMessage(
+			QString("Scan complete: %1 records found, %2 errors")
+			.arg(recordCount).arg(errorCount));
 	}
 
 	void onQuit() {
