@@ -1300,13 +1300,39 @@ private slots:
 		for (auto &file : tape->GetFiles()) {
 			for (auto &existing : file.GetRecords()) {
 				if (existing.GetSOHIndex() == sohIdx) {
-					emit statusMessage(QString(
-						"Duplicate record %1 found at %2 (width %3) — "
-						"already exists in file %4")
-						.arg(static_cast<qint64>(record.GetRecordNumber()))
-						.arg(static_cast<qint64>(sohIdx))
-						.arg(width)
-						.arg(QString::fromStdString(existing.GetName()).trimmed()));
+					// Compare byte-by-byte to see if the rescan differs
+					auto oldBytes = existing.GetAllBytes();
+					auto newBytes = record.GetAllBytes();
+					int diffCount = 0;
+					size_t minLen = std::min(oldBytes.size(), newBytes.size());
+					for (size_t i = 0; i < minLen; i++) {
+						if (oldBytes[i]->value != newBytes[i]->value)
+							diffCount++;
+					}
+					diffCount += static_cast<int>(
+						std::max(oldBytes.size(), newBytes.size()) - minLen);
+
+					if (diffCount > 0) {
+						existing = std::move(record);
+						update();
+						emit tapeDataChanged();
+						emit statusMessage(QString(
+							"Rescan updated record %1 at %2 (width %3) in file %4 — "
+							"%5 byte(s) changed")
+							.arg(static_cast<qint64>(existing.GetRecordNumber()))
+							.arg(static_cast<qint64>(sohIdx))
+							.arg(width)
+							.arg(QString::fromStdString(existing.GetName()).trimmed())
+							.arg(diffCount));
+					} else {
+						emit statusMessage(QString(
+							"Rescan of record %1 at %2 (width %3) in file %4 — "
+							"rescanned record is identical")
+							.arg(static_cast<qint64>(record.GetRecordNumber()))
+							.arg(static_cast<qint64>(sohIdx))
+							.arg(width)
+							.arg(QString::fromStdString(existing.GetName()).trimmed()));
+					}
 					return;
 				}
 			}
@@ -1348,6 +1374,8 @@ private slots:
 	void ScanAllFromHere(TapeIndex idx) {
 		if (!decoder || !tape || !audio) return;
 
+		QApplication::setOverrideCursor(Qt::WaitCursor);
+
 		// Remove existing records whose start index is >= idx
 		for (auto &file : tape->GetFiles()) {
 			auto &recs = file.GetRecords();
@@ -1370,6 +1398,7 @@ private slots:
 			currentFileName = currentFile->GetRecords()[0].GetName();
 		}
 
+		int recordCount = 0;
 		while (idx < audio->SampleCount()) {
 			Record record;
 			if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
@@ -1379,16 +1408,25 @@ private slots:
 				break;
 			}
 
+			recordCount++;
 			std::string recName = record.GetName();
+			uint16_t recNum = record.GetRecordNumber();
 			if (!currentFile || recName != currentFileName) {
 				files.emplace_back();
 				currentFile = &files.back();
 				currentFileName = recName;
 			}
 			currentFile->GetRecords().push_back(std::move(record));
+
+			emit statusMessage(QString("Scanning: %1 record %2 (%3 found)")
+				.arg(QString::fromStdString(recName).trimmed())
+				.arg(recNum).arg(recordCount));
+			QApplication::processEvents();
+
 			idx = nextIdx;
 		}
 
+		QApplication::restoreOverrideCursor();
 		update();
 		emit tapeDataChanged();
 	}
@@ -1979,12 +2017,15 @@ private slots:
 		QMenu contextMenu(recordTable);
 		QAction *deleteAction = contextMenu.addAction("Delete");
 		QAction *saveAction = contextMenu.addAction("Save Tape File");
+		QAction *exportCasAction = contextMenu.addAction("Export Tape File");
 
 		QAction *chosen = contextMenu.exec(recordTable->viewport()->mapToGlobal(pos));
 		if (chosen == deleteAction) {
 			deleteRecordAtRow(row);
 		} else if (chosen == saveAction) {
 			saveTapeFileFromRow(row);
+		} else if (chosen == exportCasAction) {
+			exportCasFileFromRow(row);
 		}
 	}
 
@@ -2121,6 +2162,267 @@ private slots:
 			.arg(writtenCount).arg(dirPath));
 	}
 
+	void exportCasFileFromRow(int row) {
+		int fileIdx, recIdx;
+		if (!findRecordByRow(row, fileIdx, recIdx)) return;
+
+		auto &files = tape.GetFiles();
+		auto &recs = files[fileIdx].GetRecords();
+
+		// Get the tape file name from record 0 of this file
+		std::string tapeFileName = recs[0].GetName();
+		std::string trimmedName = tapeFileName;
+		while (!trimmedName.empty() && trimmedName.back() == ' ')
+			trimmedName.pop_back();
+
+		// --- Gather the contiguous run of records starting from record 0 ---
+		std::vector<Record *> casRecords;
+		for (size_t i = 0; i < recs.size(); i++) {
+			if (recs[i].GetName() == tapeFileName) {
+				casRecords.push_back(&recs[i]);
+			}
+		}
+
+		// --- Validate the record set ---
+		QStringList warnings;
+		bool hasEndRecord = false;
+		int expectedRecNum = 0;
+
+		for (size_t i = 0; i < casRecords.size(); i++) {
+			Record *r = casRecords[i];
+			int recNum = r->GetRecordNumber();
+
+			// Check sequential record numbers starting at 0
+			if (recNum != expectedRecNum) {
+				warnings << QString("Record number %1 found, expected %2")
+					.arg(recNum).arg(expectedRecNum);
+			}
+			expectedRecNum = recNum + 1;
+
+			// Check name consistency
+			if (r->GetName() != tapeFileName) {
+				warnings << QString("Record %1 has name '%2', expected '%3'")
+					.arg(recNum)
+					.arg(QString::fromStdString(r->GetName()).trimmed())
+					.arg(QString::fromStdString(trimmedName));
+			}
+
+			// Check for End record
+			if (r->GetTypeValue() == 0x02) {
+				hasEndRecord = true;
+				if (i != casRecords.size() - 1) {
+					warnings << QString("End record at position %1 is not the last record")
+						.arg(static_cast<int>(i));
+				}
+			}
+
+			// Check data length: all non-End, non-last records should be 256
+			if (r->GetTypeValue() != 0x02 && i < casRecords.size() - 1) {
+				if (r->GetDataLength() != 256) {
+					warnings << QString("Record %1 has length %2, expected 256")
+						.arg(recNum).arg(r->GetDataLength());
+				}
+			}
+
+			// Checksum warnings (soft errors)
+			if (!r->HeaderChecksumIsValid()) {
+				warnings << QString("Record %1 has header checksum error").arg(recNum);
+			}
+			if (!r->DataChecksumIsValid()) {
+				warnings << QString("Record %1 has data checksum error").arg(recNum);
+			}
+		}
+
+		if (!hasEndRecord) {
+			warnings << "No End record found";
+		}
+
+		// --- Show validation dialog ---
+		QDialog validationDlg(this);
+		validationDlg.setWindowTitle("Export CAS File - Validation");
+		auto *vLayout = new QVBoxLayout(&validationDlg);
+
+		vLayout->addWidget(new QLabel(
+			QString("Tape file: <b>%1</b> (%2 records)")
+			.arg(QString::fromStdString(trimmedName))
+			.arg(casRecords.size())));
+
+		if (warnings.isEmpty()) {
+			vLayout->addWidget(new QLabel("All checks passed."));
+		} else {
+			auto *warnLabel = new QLabel("Warnings:");
+			warnLabel->setStyleSheet("color: #ff5050; font-weight: bold;");
+			vLayout->addWidget(warnLabel);
+			auto *warnList = new QTextEdit(&validationDlg);
+			warnList->setReadOnly(true);
+			warnList->setPlainText(warnings.join("\n"));
+			warnList->setMaximumHeight(150);
+			vLayout->addWidget(warnList);
+		}
+
+		auto *exportAsCasCheckBox = new QCheckBox("Export as CAS file", &validationDlg);
+		exportAsCasCheckBox->setChecked(true);
+		vLayout->addWidget(exportAsCasCheckBox);
+
+		QCheckBox *createEndCheckBox = nullptr;
+		if (!hasEndRecord) {
+			createEndCheckBox = new QCheckBox("Create missing end record?", &validationDlg);
+			createEndCheckBox->setChecked(true);
+			vLayout->addWidget(createEndCheckBox);
+		}
+
+		auto *buttons = new QDialogButtonBox(
+			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &validationDlg);
+		vLayout->addWidget(buttons);
+		connect(buttons, &QDialogButtonBox::accepted, &validationDlg, &QDialog::accept);
+		connect(buttons, &QDialogButtonBox::rejected, &validationDlg, &QDialog::reject);
+
+		if (validationDlg.exec() != QDialog::Accepted) return;
+
+		bool createEndRecord = createEndCheckBox && createEndCheckBox->isChecked();
+		bool exportAsCas = exportAsCasCheckBox->isChecked();
+
+		// --- File save dialog ---
+		QString defaultName = QString::fromStdString(trimmedName)
+			+ (exportAsCas ? ".CAS" : "");
+		QString filter = exportAsCas
+			? "CAS Files (*.CAS *.cas);;All Files (*)"
+			: "All Files (*)";
+		QString filePath = QFileDialog::getSaveFileName(
+			this, "Export Tape File", defaultName, filter);
+		if (filePath.isEmpty()) return;
+
+		// --- Write the file ---
+		std::ofstream ofs(filePath.toStdString(), std::ios::binary);
+		if (!ofs) {
+			QMessageBox::critical(this, "Export Tape File",
+				QString("Failed to create file: %1").arg(filePath));
+			return;
+		}
+
+		int recordsWritten = 0;
+		int totalDataBytes = 0;
+
+		auto writeRecordBinary = [&](Record *r) {
+			if (exportAsCas) {
+				// Write 16 bytes of 0xe6 leader
+				uint8_t leader = 0xe6;
+				for (int i = 0; i < 16; i++)
+					ofs.write(reinterpret_cast<const char *>(&leader), 1);
+
+				// Write SOH byte (0x01)
+				uint8_t sohByte = 0x01;
+				ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
+
+				// Write 14 header bytes + header checksum
+				auto allBytes = r->GetAllBytes();
+				size_t leaderCount = 0;
+				for (auto *tb : allBytes) {
+					if (tb->fieldType == FieldType::Leader) leaderCount++;
+					else break;
+				}
+				size_t hdrStart = leaderCount + 1; // skip soh
+				for (size_t i = hdrStart; i < hdrStart + 14; i++) {
+					uint8_t b = allBytes[i]->value ? *(allBytes[i]->value) : 0;
+					ofs.write(reinterpret_cast<const char *>(&b), 1);
+				}
+				{
+					uint8_t b = allBytes[hdrStart + 14]->value
+						? *(allBytes[hdrStart + 14]->value) : 0;
+					ofs.write(reinterpret_cast<const char *>(&b), 1);
+				}
+			}
+
+			// Write data bytes
+			auto &dataBytes = r->GetData();
+			int dataLen = static_cast<int>(dataBytes.size());
+			for (int i = 0; i < dataLen; i++) {
+				uint8_t b = dataBytes[i].value ? *(dataBytes[i].value) : 0;
+				ofs.write(reinterpret_cast<const char *>(&b), 1);
+			}
+			totalDataBytes += dataLen;
+
+			if (exportAsCas) {
+				// Write data checksum
+				auto allBytes = r->GetAllBytes();
+				uint8_t b = allBytes.back()->value
+					? *(allBytes.back()->value) : 0;
+				ofs.write(reinterpret_cast<const char *>(&b), 1);
+			}
+
+			recordsWritten++;
+		};
+
+		bool wroteEndRecord = false;
+		int prevRecNum = -1;
+		for (auto *r : casRecords) {
+			int recNum = r->GetRecordNumber();
+			if (prevRecNum >= 0 && recNum <= prevRecNum) {
+				// Record number decreased — duplicate copy, stop
+				break;
+			}
+			writeRecordBinary(r);
+			prevRecNum = recNum;
+			if (r->GetTypeValue() == 0x02) {
+				wroteEndRecord = true;
+				break;
+			}
+		}
+
+		// Create a synthetic End record if requested (CAS mode only)
+		if (exportAsCas && createEndRecord && !wroteEndRecord) {
+			// Write 16 bytes of 0xe6 leader
+			uint8_t leader = 0xe6;
+			for (int i = 0; i < 16; i++)
+				ofs.write(reinterpret_cast<const char *>(&leader), 1);
+
+			// Write SOH
+			uint8_t sohByte = 0x01;
+			ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
+
+			// Build a 14-byte header + checksum for End record
+			uint8_t endHeader[14] = {};
+			// Copy the tape file name (8 bytes, space-padded)
+			for (int i = 0; i < 8; i++) {
+				endHeader[i] = (i < static_cast<int>(tapeFileName.size()))
+					? static_cast<uint8_t>(tapeFileName[i]) : ' ';
+			}
+			// Record number = next after the last one written
+			uint16_t nextRecNum = 0;
+			if (!casRecords.empty())
+				nextRecNum = casRecords.back()->GetRecordNumber() + 1;
+			endHeader[8] = static_cast<uint8_t>(nextRecNum & 0xff);
+			endHeader[9] = static_cast<uint8_t>((nextRecNum >> 8) & 0xff);
+			// Length = 0
+			endHeader[10] = 0;
+			// Address = 0
+			endHeader[11] = 0;
+			endHeader[12] = 0;
+			// Type = End (0x02)
+			endHeader[13] = 0x02;
+
+			// Compute header checksum (two's complement so sum of all + checksum = 0)
+			uint8_t hdrSum = 0;
+			for (int i = 0; i < 14; i++) hdrSum += endHeader[i];
+			uint8_t hdrCS = static_cast<uint8_t>(-hdrSum);
+
+			ofs.write(reinterpret_cast<const char *>(endHeader), 14);
+			ofs.write(reinterpret_cast<const char *>(&hdrCS), 1);
+
+			// End records have no data, but write a zero data checksum
+			uint8_t dataCS = 0;
+			ofs.write(reinterpret_cast<const char *>(&dataCS), 1);
+
+			recordsWritten++;
+		}
+
+		ofs.close();
+
+		QMessageBox::information(this, "Export Tape File",
+			QString("Export complete: %1 record(s) written, %2 data bytes written to\n%3")
+			.arg(recordsWritten).arg(totalDataBytes).arg(filePath));
+	}
+
 	void onWaveformRecordClicked(double sampleIndex) {
 		// Find which record contains this sample and select it
 		int row = 0;
@@ -2235,6 +2537,8 @@ private slots:
 			return;
 		}
 
+		QApplication::setOverrideCursor(Qt::WaitCursor);
+
 		// Clear existing tape data
 		tape.GetFiles().clear();
 
@@ -2274,9 +2578,17 @@ private slots:
 				errorCount++;
 			}
 
+			statusBar()->showMessage(
+				QString("Scanning: %1 record %2 (%3 found, %4 errors)")
+				.arg(QString::fromStdString(recName).trimmed())
+				.arg(record.GetRecordNumber())
+				.arg(recordCount).arg(errorCount));
+			QApplication::processEvents();
+
 			idx = nextIdx;
 		}
 
+		QApplication::restoreOverrideCursor();
 		waveformView->setTape(&tape);
 		waveformView->update();
 		refreshRecordTable();
