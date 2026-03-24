@@ -148,20 +148,46 @@ class Record {
 		}
 	}
 
-	// Generate a hex dump of the data bytes, 16 bytes per line
+	// Generate a hex dump of the data bytes, 16 bytes per line with ASCII
 	std::string GetHexDump() const {
 		std::string result;
 		uint16_t len = GetDataLength();
-		for (uint16_t i = 0; i < len && i < data.size(); i++) {
-			if (i > 0 && i % 16 == 0) result += "\n";
-			if (data[i].value) {
-				char buf[4];
-				snprintf(buf, sizeof(buf), "%02x ", *(data[i].value));
-				result += buf;
-			} else {
-				result += "?? ";
+		if (len > data.size()) len = static_cast<uint16_t>(data.size());
+
+		for (uint16_t i = 0; i < len; i += 16) {
+			if (i > 0) result += "\n";
+
+			// Hex portion
+			uint16_t lineEnd = std::min(static_cast<uint16_t>(i + 16), len);
+			for (uint16_t j = i; j < lineEnd; j++) {
+				if (data[j].value) {
+					char buf[4];
+					snprintf(buf, sizeof(buf), "%02x ", *(data[j].value));
+					result += buf;
+				} else {
+					result += "?? ";
+				}
+				if ((j - i + 1) == 8 && (j - i + 1) != 16) result += " ";
 			}
-			if ((i + 1) % 8 == 0 && (i + 1) % 16 != 0) result += " ";
+
+			// Pad short last line so ASCII column aligns
+			for (uint16_t j = lineEnd; j < i + 16; j++) {
+				result += "   ";
+				if ((j - i + 1) == 8) result += " ";
+			}
+
+			// ASCII portion
+			result += " |";
+			for (uint16_t j = i; j < lineEnd; j++) {
+				if (data[j].value) {
+					uint8_t ch = *(data[j].value);
+					result += (ch >= 0x20 && ch <= 0x7e)
+						? static_cast<char>(ch) : '.';
+				} else {
+					result += '.';
+				}
+			}
+			result += '|';
 		}
 		return result;
 	}
@@ -399,10 +425,7 @@ class Record {
 			return {idx, ScanStatus::AudioEOF};
 		}
 
-		if (!HeaderChecksumIsValid()) {
-			scanStatus = ScanStatus::HeaderChecksumFail;
-			return {idx, ScanStatus::HeaderChecksumFail};
-		}
+		bool headerCsFailed = !HeaderChecksumIsValid();
 
 		// --- Read data bytes ---
 		uint16_t dataLength = ln.value ? (*(ln.value) == 0 ? 256 : *(ln.value)) : 0;
@@ -417,6 +440,11 @@ class Record {
 		} catch (const AudioEOF &) {
 			scanStatus = ScanStatus::AudioEOF;
 			return {idx, ScanStatus::AudioEOF};
+		}
+
+		if (headerCsFailed) {
+			scanStatus = ScanStatus::HeaderChecksumFail;
+			return {idx, ScanStatus::HeaderChecksumFail};
 		}
 
 		if (!DataChecksumIsValid()) {
