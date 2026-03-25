@@ -615,6 +615,7 @@ struct MainWindowSettings {
 	double curveDragRange = 0.25;
 	bool invertMouseWheelScroll = false;
 	bool autoRepairHeaderLength = true;
+	int dcOffset = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -660,6 +661,11 @@ public:
 		autoRepairHeaderLengthCheckBox->setChecked(settingsRef.autoRepairHeaderLength);
 		layout->addRow("Auto Repair Header Length", autoRepairHeaderLengthCheckBox);
 
+		dcOffsetSpin = new QSpinBox(this);
+		dcOffsetSpin->setRange(-32768, 32767);
+		dcOffsetSpin->setValue(settingsRef.dcOffset);
+		layout->addRow("DC Offset", dcOffsetSpin);
+
 		auto *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 		layout->addRow(buttons);
@@ -675,6 +681,7 @@ public:
 		settingsRef.curveDragRange = curveDragRangeSpin->value();
 		settingsRef.invertMouseWheelScroll = invertMouseWheelScrollCheckBox->isChecked();
 		settingsRef.autoRepairHeaderLength = autoRepairHeaderLengthCheckBox->isChecked();
+		settingsRef.dcOffset = dcOffsetSpin->value();
 		QDialog::accept();
 	}
 
@@ -686,6 +693,7 @@ private:
 	QDoubleSpinBox *curveDragRangeSpin;
 	QCheckBox *invertMouseWheelScrollCheckBox;
 	QCheckBox *autoRepairHeaderLengthCheckBox;
+	QSpinBox *dcOffsetSpin;
 };
 
 // ---------------------------------------------------------------------------
@@ -2518,6 +2526,7 @@ private slots:
 
 		try {
 			audioPtr = std::make_shared<Audio>(fileName.toStdString());
+			applyAudioSettings();
 			waveformView->setAudio(audioPtr);
 			waveformView->setDecoder(createDecoder());
 			waveformView->setTape(&tape);
@@ -2557,16 +2566,26 @@ private slots:
 		}
 	}
 
+	void applyAudioSettings() {
+		if (!audioPtr) return;
+		audioPtr->SetInvertPhase(settings.invertSignal);
+		audioPtr->SetDCOffset(settings.dcOffset);
+	}
+
 	void onSettings() {
 		TapeFormat previousFormat = settings.tapeFormat;
 		SettingsDialog dlg(settings, this);
 		if (dlg.exec() == QDialog::Accepted) {
-			if (audioPtr && settings.tapeFormat != previousFormat) {
-				waveformView->setDecoder(createDecoder());
-				statusBar()->showMessage(
-					QString("Tape format changed to %1")
-					.arg(settings.tapeFormat == TapeFormat::KansasCity
-						? "Kansas City Standard" : "Poly-88 Phase Encoding"));
+			if (audioPtr) {
+				applyAudioSettings();
+				if (settings.tapeFormat != previousFormat) {
+					waveformView->setDecoder(createDecoder());
+					statusBar()->showMessage(
+						QString("Tape format changed to %1")
+						.arg(settings.tapeFormat == TapeFormat::KansasCity
+							? "Kansas City Standard" : "Poly-88 Phase Encoding"));
+				}
+				waveformView->update();
 			}
 		}
 	}
