@@ -215,7 +215,7 @@ int Audio::FindThisOrPreviousTransition(int index, int hysterisis) {
 				((Value(index) + hysterisis >=0) && (Value(index + 1) + hysterisis < 0))) {
 			break;
 		}
-		index++;
+		index--;
 	}
 
 	if(index <= 0) {

@@ -1219,7 +1219,7 @@ protected:
 				return;
 			}
 			try {
-				int newIdx = audio->FindThisOrPreviousZeroCrossing(
+				int newIdx = audio->FindThisOrPreviousTransition(
 					static_cast<int>(selection.startIndex) - 1);
 				computeSelection(static_cast<TapeIndex>(newIdx));
 				scrollToFollow(newIdx);
