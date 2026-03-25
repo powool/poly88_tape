@@ -21,53 +21,42 @@ class DataInterfaceBase : public DataInterface {
 		samplesPerBit = audio->SamplesPerBit(bitRate);
 	}
 
+	LeaderResult FindEndOfNextLeaderInternal(TapeIndex tapeIndex) {
+		int e6Count = 0;
+		TapeIndex initialTapeIndex = tapeIndex;
+		while (tapeIndex < audio->SampleCount()) {
+			auto readResult = ReadByte(tapeIndex);
+			if(readResult.second == 0xe6) {
+				e6Count ++;
+				tapeIndex = readResult.first;
+				continue;
+			} else if(readResult.second == 0x01 && e6Count > 4) {
+				return { initialTapeIndex, readResult.first, readResult.second };
+			}
+			// tells our caller to move to the next zero crossing
+			return { 0, 0, 0};
+		}
+		throw AudioEOF("ran out of data");
+	}
+
 	// Read and re-sync as needed until we read a series of 0xe6 bytes.
 	// Return the tape index and first non-0xe6 byte. This is slow, so
 	// make sure to find the carrier before calling this.
-	LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) {
+	LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex) {
 		std::pair<TapeIndex, uint8_t> readResult;
 
-		// This loop will either throw a TapeEOF, or it
-		// will find "leaderByteCount" 0xe6 bytes in a row.
-		for(int i = 0; i < leaderByteCount ; i++) {
-			readResult = ReadByte(tapeIndex);
-
-			if (debugByte) {
-				std::cout << std::format(
-					"{}-{} ({}): ReadByte {:02x}",
-					tapeIndex,
-					readResult.first,
-					readResult.first - tapeIndex,
-					readResult.second) << std::endl;
+		while (tapeIndex < audio->SampleCount()) {
+			auto result = FindEndOfNextLeaderInternal(tapeIndex);
+			if (result.sohStart && result.nextIndex && result.value == 0x01) {
+				// tapeIndex is the position from which the non-0xe6 byte was read
+				// (i.e. the SOH byte start), readResult.first is the next read position
+				return result;
 			}
-
-			if (readResult.second != 0xe6) {
-				if (tapeIndex == Rewind()) {
-					// Prevent a rewind back to where we are (this
-					// happens when signals are very low).
-					tapeIndex = audio->FindThisOrNextZeroCrossing(tapeIndex + 1, hysterisis);
-				} else {
-					// this respects bit boundaries
-					tapeIndex = Rewind();
-				}
-				i = -1;
-				continue;
-			}
-			// next read location
-			tapeIndex = readResult.first;
-		}
-
-		while(readResult.second == 0xe6) {
-			readResult = ReadByte(tapeIndex);
-			if (readResult.second != 0xe6) {
-				break;
-			}
-			tapeIndex = readResult.first;
-		}
-
-		// tapeIndex is the position from which the non-0xe6 byte was read
-		// (i.e. the SOH byte start), readResult.first is the next read position
-		return { tapeIndex, readResult.first, readResult.second };
+			// we didn't find it, so skip to next zero
+			// crossing (either direction)
+			tapeIndex = audio->FindThisOrNextTransition(tapeIndex + 1, hysterisis);
+		};
+		throw AudioEOF("ran out of data");
 	}
 	void SetDebugByte(bool d) { debugByte = d; }
 	void SetDebugBit(bool d) { debugBit = d; }

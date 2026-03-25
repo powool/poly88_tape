@@ -478,7 +478,7 @@ class Record {
 		// --- Find leader and SOH ---
 		LeaderResult leaderResult;
 		try {
-			leaderResult = dec->FindEndOfNextLeader(idx, 3);
+			leaderResult = dec->FindEndOfNextLeader(idx);
 		} catch (const AudioEOF &) {
 			scanStatus = ScanStatus::AudioEOF;
 			return {idx, ScanStatus::AudioEOF};
@@ -1205,7 +1205,7 @@ protected:
 		if (event->key() == Qt::Key_Right && noMods) {
 			// Move selection to next zero crossing
 			try {
-				int newIdx = audio->FindThisOrNextZeroCrossing(
+				int newIdx = audio->FindThisOrNextTransition(
 					static_cast<int>(selection.startIndex) + 1);
 				computeSelection(static_cast<TapeIndex>(newIdx));
 				scrollToFollow(newIdx);

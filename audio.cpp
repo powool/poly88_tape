@@ -206,6 +206,25 @@ int Audio::FindThisOrNextTransition(int index, int hysterisis) {
 	return index;
 }
 
+// This detects any transition, with any polarity
+int Audio::FindThisOrPreviousTransition(int index, int hysterisis) {
+	// Skip to next negative to positive signal transition.
+	// Caller needs to verify if this is a local transition or not
+	while (index > 1) {
+		if (((Value(index) - hysterisis < 0) && (Value(index + 1) - hysterisis >= 0)) ||
+				((Value(index) + hysterisis >=0) && (Value(index + 1) + hysterisis < 0))) {
+			break;
+		}
+		index++;
+	}
+
+	if(index <= 0) {
+		throw AudioEOF("ran out of data");
+	}
+
+	return index;
+}
+
 // Detect if this is a regional high point.
 // Due to noisy signals, the caller needs to see if this
 // peak is unique.

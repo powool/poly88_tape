@@ -128,7 +128,7 @@ int main(int argc, char **argv)
 				audio->TimeOffset(carrierResult.second - carrierResult.first)
 				) << std::endl;
 
-		auto leaderResult = decoder->FindEndOfNextLeader(carrierResult.second, 10);
+		auto leaderResult = decoder->FindEndOfNextLeader(carrierResult.second);
 #endif
 		try {
 #if 0
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
 			}
 			exit(0);
 #else
-			auto leaderResult = decoder->FindEndOfNextLeader(tapeIndex, 10);
+			auto leaderResult = decoder->FindEndOfNextLeader(tapeIndex);
 			RecordPtr record = std::make_shared<Record>();
 			tapeIndex = record->Read(decoder, leaderResult);
 			record->Dump(true);

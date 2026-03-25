@@ -92,6 +92,9 @@ public:
 	// This detects any transition, with any polarity
 	int FindThisOrNextTransition(int index, int hysterisis = 0);
 
+	// This detects any transition, with any polarity
+	int FindThisOrPreviousTransition(int index, int hysterisis = 0);
+
 	// Detect if this is a regional high point.
 	// Due to noisy signals, the caller needs to see if this
 	// peak is unique.

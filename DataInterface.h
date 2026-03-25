@@ -39,7 +39,7 @@ class DataInterface {
 
 	// Read and re-sync as needed until we read a series of 0xe6 bytes.
 	// Return the SOH byte start position, the next read index, and the byte value.
-	virtual LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex, int leaderByteCount) = 0;
+	virtual LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex) = 0;
 
 	// Read a single byte - the returned TapeIndex is a potentially
 	// virtual bit pointer - it may or may not point to an audio
