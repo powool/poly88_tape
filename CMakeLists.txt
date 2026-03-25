@@ -25,11 +25,9 @@ add_custom_target(
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
 qt_standard_project_setup()
 
-qt_add_executable(PolyWaveToImage
+qt_add_executable(poly88_tape
 	PolyWaveToImage.cpp
 	audio.cpp
 )
 
-target_link_libraries(PolyWaveToImage PRIVATE Qt6::Widgets Qt6::Gui)
-
-add_executable(testing testing.cpp audio.cpp)
+target_link_libraries(poly88_tape PRIVATE Qt6::Widgets Qt6::Gui)
