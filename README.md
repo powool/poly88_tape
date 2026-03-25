@@ -167,3 +167,38 @@ file.
 
 All of this will allow me to explore how to recover the
 missing bits in the polyphase and byte format files.
+
+# Hardware Requirements
+
+Polyphase is sensitive to low scan resolution. I've been
+using a Focusrite Scarlett 2i2 to read samples at 192K
+per second.
+
+Byte tapes look like 44,100 cycles per second should be
+fine, because the bit rate is low, and there is a fair
+bit of excess information in the waveworm than there
+is for Polyphase.
+
+I'm sure other combinations will work, this is my
+setup.
+
+# Recovery Workflow
+
+1. Tape to audio capture - audacity on Linux works well
+1. Export to WAV 16 bit sample, mono (1) channel
+1. Run poly88\_tape
+1. Load the WAV file
+1. Repeatedly change settings until "Scan All" (control A) seems to get
+most or all of the records
+1. Zoom in an edit the audio data to see if I can fix the problem - this
+works sometimes!
+1. Export the file either as a CAS file or as raw data
+
+It is not a perect process, by any means, and there may be
+other things that can be done to improve it, such as running
+a high pass filter to drop out some of the 60 and 120 Hz hum
+that is often present.
+
+# Feedback
+
+I welcome constructive feedback or better yet, bug fixes!
