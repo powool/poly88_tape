@@ -23,6 +23,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
@@ -746,6 +747,8 @@ public:
 	}
 
 	AudioPtr getAudio() const { return audio; }
+	DataInterfacePtr getDecoder() const { return decoder; }
+	const WaveformSelection &getSelection() const { return selection; }
 
 	void clearSelection() {
 		selection = WaveformSelection();
@@ -757,6 +760,8 @@ public:
 		if (!decoder) return;
 		selection = WaveformSelection();
 		try {
+			// reset "last bit" to zero:
+			decoder->Rewind();
 			selection.byte1 = decoder->ReadByteWithBits(startIdx);
 			selection.byte2 = decoder->ReadByteWithBits(selection.byte1.endIndex);
 			selection.startIndex = startIdx;
@@ -820,6 +825,8 @@ signals:
 	void recordClicked(double sampleIndex);
 	void selectionChanged(const WaveformSelection &sel);
 	void statusMessage(const QString &msg);
+	void findRequested();
+	void findRepeatRequested(int direction);
 
 protected:
 	void paintEvent(QPaintEvent *) override {
@@ -1193,15 +1200,26 @@ protected:
 	}
 
 	void keyPressEvent(QKeyEvent *event) override {
+		Qt::KeyboardModifiers mods = event->modifiers() &
+			(Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier);
+		bool ctrlOnly = (mods == Qt::ControlModifier);
+
+		if (event->key() == Qt::Key_F && ctrlOnly) {
+			emit findRequested();
+			event->accept();
+			return;
+		} else if (event->key() == Qt::Key_R && ctrlOnly) {
+			emit findRepeatRequested(1); // repeat forward
+			event->accept();
+			return;
+		}
+
 		if (!audio || !selection.active) {
 			QWidget::keyPressEvent(event);
 			return;
 		}
 
-		Qt::KeyboardModifiers mods = event->modifiers() &
-			(Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier);
 		bool noMods = (mods == Qt::NoModifier);
-		bool ctrlOnly = (mods == Qt::ControlModifier);
 
 		auto scrollToFollow = [&](double idx) {
 			double px = sampleToPixel(idx);
@@ -1521,6 +1539,127 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// FindDialog - modeless search dialog for binary byte patterns
+// ---------------------------------------------------------------------------
+class FindDialog : public QDialog {
+	Q_OBJECT
+public:
+	FindDialog(QWidget *parent = nullptr)
+		: QDialog(parent)
+	{
+		setWindowTitle("Find");
+		setMinimumWidth(420);
+		auto *layout = new QVBoxLayout(this);
+
+		// Search string input (accepts binary/ASCII characters)
+		layout->addWidget(new QLabel("Search string (binary-safe):"));
+		searchEdit = new QLineEdit(this);
+		searchEdit->setFont(QFont("Monospace", 10));
+		layout->addWidget(searchEdit);
+
+		// Hex display (read-only)
+		layout->addWidget(new QLabel("Hex:"));
+		hexDisplay = new QLineEdit(this);
+		hexDisplay->setReadOnly(true);
+		hexDisplay->setFont(QFont("Monospace", 10));
+		hexDisplay->setStyleSheet("background-color: #2a2a2a; color: #88cc88;");
+		layout->addWidget(hexDisplay);
+
+		connect(searchEdit, &QLineEdit::textChanged, this, &FindDialog::updateHexDisplay);
+
+		// Special byte buttons
+		auto *btnRow = new QHBoxLayout();
+		auto *leaderBtn = new QPushButton("Leader byte: 0xE6", this);
+		auto *sohBtn = new QPushButton("Start of Header byte: 0x01", this);
+		btnRow->addWidget(leaderBtn);
+		btnRow->addWidget(sohBtn);
+		layout->addLayout(btnRow);
+
+		connect(leaderBtn, &QPushButton::clicked, this, [this]() {
+			appendByte(0xE6);
+		});
+		connect(sohBtn, &QPushButton::clicked, this, [this]() {
+			appendByte(0x01);
+		});
+
+		// Search width
+		auto *widthRow = new QHBoxLayout();
+		widthRow->addWidget(new QLabel("Search width (samples):"));
+		searchWidthSpin = new QSpinBox(this);
+		searchWidthSpin->setRange(100, 10000000);
+		searchWidthSpin->setValue(10000);
+		searchWidthSpin->setSingleStep(1000);
+		widthRow->addWidget(searchWidthSpin);
+		layout->addLayout(widthRow);
+
+		// Search direction buttons
+		auto *searchRow = new QHBoxLayout();
+		auto *searchLeftBtn = new QPushButton("\u25C0 Search Left", this);
+		auto *searchRightBtn = new QPushButton("Search Right \u25B6", this);
+		searchLeftBtn->setMinimumHeight(32);
+		searchRightBtn->setMinimumHeight(32);
+		searchRow->addWidget(searchLeftBtn);
+		searchRow->addWidget(searchRightBtn);
+		layout->addLayout(searchRow);
+
+		connect(searchLeftBtn, &QPushButton::clicked, this, [this]() {
+			emit searchTriggered(-1);
+		});
+		connect(searchRightBtn, &QPushButton::clicked, this, [this]() {
+			emit searchTriggered(1);
+		});
+	}
+
+	// Get the search pattern as raw bytes
+	QByteArray getSearchBytes() const {
+		QString text = searchEdit->text();
+		QByteArray result;
+		for (int i = 0; i < text.size(); i++) {
+			result.append(static_cast<char>(text[i].unicode() & 0xFF));
+		}
+		return result;
+	}
+
+	int getSearchWidth() const {
+		return searchWidthSpin->value();
+	}
+
+	// Set the search string (used to persist across popups)
+	void setSearchString(const QString &s) {
+		searchEdit->setText(s);
+	}
+
+	QString getSearchString() const {
+		return searchEdit->text();
+	}
+
+signals:
+	void searchTriggered(int direction); // -1 = left, +1 = right
+
+private:
+	QLineEdit *searchEdit;
+	QLineEdit *hexDisplay;
+	QSpinBox *searchWidthSpin;
+
+	void appendByte(uint8_t byte) {
+		QString text = searchEdit->text();
+		text.append(QChar(byte));
+		searchEdit->setText(text);
+	}
+
+	void updateHexDisplay() {
+		QByteArray bytes = getSearchBytes();
+		QString hex;
+		for (int i = 0; i < bytes.size(); i++) {
+			if (i > 0) hex += ' ';
+			hex += QString("%1").arg(
+				static_cast<uint8_t>(bytes[i]), 2, 16, QChar('0')).toUpper();
+		}
+		hexDisplay->setText(hex);
+	}
+};
+
+// ---------------------------------------------------------------------------
 // MainWindow
 // ---------------------------------------------------------------------------
 class MainWindow : public QMainWindow {
@@ -1577,6 +1716,12 @@ private:
 	int scrollDirection = 0;    // -1 = left, +1 = right, 0 = stopped
 	int scrollTickCount = 0;
 
+	// Find dialog state
+	FindDialog *findDialog = nullptr;
+	QString persistentSearchString;
+	int lastSearchDirection = 1;
+	int lastSearchWidth = 10000;
+
 	void buildMenus() {
 		// --- File menu ---
 		QMenu *fileMenu = menuBar()->addMenu("&File");
@@ -1602,11 +1747,15 @@ private:
 		connect(quitAction, &QAction::triggered, this, &MainWindow::onQuit);
 
 		// --- Scan menu ---
-		QMenu *scanMenu = menuBar()->addMenu("&Scan");
+		QMenu *tapeMenu = menuBar()->addMenu("&Tape");
 
-		QAction *scanAllAction = scanMenu->addAction("Scan &All Records");
+		QAction *scanAllAction = tapeMenu->addAction("Scan &All Records");
 		scanAllAction->setShortcut(QKeySequence("Ctrl+A"));
 		connect(scanAllAction, &QAction::triggered, this, &MainWindow::onScanAll);
+
+		QAction *findAction = tapeMenu->addAction("&Find");
+		findAction->setShortcut(QKeySequence("Ctrl+F"));
+		connect(findAction, &QAction::triggered, this, &MainWindow::onFind);
 
 		// --- Help menu ---
 		QMenu *helpMenu = menuBar()->addMenu("&Help");
@@ -1703,6 +1852,10 @@ private:
 			this, &MainWindow::onSelectionChanged);
 		connect(waveformView, &WaveformView::statusMessage,
 			this, [this](const QString &msg) { statusBar()->showMessage(msg); });
+		connect(waveformView, &WaveformView::findRequested,
+			this, &MainWindow::onFind);
+		connect(waveformView, &WaveformView::findRepeatRequested,
+			this, [this](int dir) { performSearch(dir); });
 
 		// --- Middle pane: two rows of status labels ---
 		auto *middleWidget = new QWidget(splitter);
@@ -2525,6 +2678,8 @@ private slots:
 		if (fileName.isEmpty()) return;
 
 		try {
+			tape.GetFiles().clear();
+			refreshRecordTable();
 			audioPtr = std::make_shared<Audio>(fileName.toStdString());
 			applyAudioSettings();
 			waveformView->setAudio(audioPtr);
@@ -2678,6 +2833,174 @@ private slots:
 
 	void onQuit() {
 		close();
+	}
+
+	void onFind() {
+		if (!findDialog) {
+			findDialog = new FindDialog(this);
+			findDialog->setAttribute(Qt::WA_DeleteOnClose);
+			connect(findDialog, &QObject::destroyed, this, [this]() {
+				findDialog = nullptr;
+			});
+			connect(findDialog, &FindDialog::searchTriggered,
+				this, [this](int direction) {
+					// Save state from dialog before searching
+					persistentSearchString = findDialog->getSearchString();
+					lastSearchWidth = findDialog->getSearchWidth();
+					lastSearchDirection = direction;
+					performSearch(direction);
+				});
+		}
+		findDialog->setSearchString(persistentSearchString);
+		findDialog->show();
+		findDialog->raise();
+		findDialog->activateWindow();
+	}
+
+	void performSearch(int direction) {
+		if (!audioPtr || !waveformView) {
+			statusBar()->showMessage("No audio file loaded.");
+			return;
+		}
+
+		DataInterfacePtr dec = waveformView->getDecoder();
+		if (!dec) {
+			statusBar()->showMessage("No decoder available.");
+			return;
+		}
+
+		// Get the search bytes from the persistent string
+		QByteArray searchBytes;
+		for (int i = 0; i < persistentSearchString.size(); i++) {
+			searchBytes.append(
+				static_cast<char>(persistentSearchString[i].unicode() & 0xFF));
+		}
+
+		if (searchBytes.isEmpty()) {
+			statusBar()->showMessage("Search string is empty.");
+			return;
+		}
+
+		// Determine start position: use selection if active, else scroll offset
+		const auto &sel = waveformView->getSelection();
+		TapeIndex startIdx;
+		if (sel.active) {
+			// Start one transition past current selection to avoid re-finding
+			startIdx = sel.startIndex;
+			try {
+				if (direction > 0) {
+					startIdx = audioPtr->FindThisOrNextTransition(
+						static_cast<int>(startIdx) + 1);
+				} else {
+					startIdx = audioPtr->FindThisOrPreviousTransition(
+						static_cast<int>(startIdx) - 1);
+				}
+			} catch (...) {}
+		} else {
+			startIdx = waveformView->getScrollOffset();
+		}
+
+		int searchWidth = lastSearchWidth;
+		TapeIndex limitIdx;
+		if (direction > 0) {
+			limitIdx = std::min(
+				startIdx + searchWidth,
+				static_cast<double>(audioPtr->SampleCount()));
+		} else {
+			limitIdx = std::max(startIdx - searchWidth, 0.0);
+		}
+
+		QApplication::setOverrideCursor(Qt::WaitCursor);
+		statusBar()->showMessage("Searching...");
+		QApplication::processEvents();
+
+		int patternLen = searchBytes.size();
+		TapeIndex idx = startIdx;
+		bool found = false;
+		TapeIndex foundIdx = 0;
+		TapeIndex foundEndIdx = 0;
+
+		while (true) {
+			if (direction > 0 && idx >= limitIdx) break;
+			if (direction < 0 && idx <= limitIdx) break;
+			if (idx < 0 || idx >= audioPtr->SampleCount()) break;
+
+			// Try to match the full pattern starting at idx
+			bool match = true;
+			TapeIndex readIdx = idx;
+			TapeIndex matchStartIdx = idx;
+
+			for (int p = 0; p < patternLen; p++) {
+				try {
+					auto [nextIdx, byteVal] = dec->ReadByte(readIdx);
+					uint8_t expected = static_cast<uint8_t>(searchBytes[p]);
+					if (byteVal != expected) {
+						match = false;
+						break;
+					}
+					readIdx = nextIdx;
+				} catch (...) {
+					match = false;
+					break;
+				}
+			}
+
+			if (match) {
+				found = true;
+				foundIdx = matchStartIdx;
+				foundEndIdx = readIdx;
+				break;
+			}
+
+			// Advance by one signal transition
+			try {
+				if (direction > 0) {
+					TapeIndex nextIdx = audioPtr->FindThisOrNextTransition(
+						static_cast<int>(idx) + 1);
+					if (nextIdx <= idx) break; // no progress
+					idx = nextIdx;
+				} else {
+					if (idx < 1) break;
+					TapeIndex prevIdx = audioPtr->FindThisOrPreviousTransition(
+						static_cast<int>(idx) - 1);
+					if (prevIdx >= idx) break; // no progress
+					idx = prevIdx;
+				}
+			} catch (...) {
+				break;
+			}
+		}
+
+		QApplication::restoreOverrideCursor();
+
+		if (found) {
+			// Set the waveform selection to the found location
+			waveformView->computeSelection(foundIdx);
+			waveformView->setScrollOffset(
+				foundIdx - waveformView->visibleSamples() * 0.25);
+			waveformView->update();
+
+			qint64 width = static_cast<qint64>(foundEndIdx - foundIdx);
+			QString msg = QString("Found at %1 (width %2)")
+				.arg(static_cast<qint64>(foundIdx)).arg(width);
+
+			// Check if this is in a known record
+			for (auto &file : tape.GetFiles()) {
+				for (auto &record : file.GetRecords()) {
+					if (record.ContainsIndex(foundIdx)) {
+						msg += QString(" in file %1 record %2")
+							.arg(QString::fromStdString(
+								record.GetName()).trimmed())
+							.arg(record.GetRecordNumber());
+						break;
+					}
+				}
+			}
+
+			statusBar()->showMessage(msg);
+		} else {
+			statusBar()->showMessage("Search string not found");
+		}
 	}
 
 	void onQuickHelp() {
