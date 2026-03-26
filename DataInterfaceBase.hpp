@@ -55,6 +55,7 @@ class DataInterfaceBase : public DataInterface {
 			// we didn't find it, so skip to next zero
 			// crossing (either direction)
 			tapeIndex = audio->FindThisOrNextTransition(tapeIndex + 1, hysterisis);
+			Rewind(); // resets last bit we saw to '0'
 		};
 		throw AudioEOF("ran out of data");
 	}
