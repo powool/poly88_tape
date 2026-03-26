@@ -277,17 +277,8 @@ class Record {
 		if (addrL.value && addrH.value)
 			address = static_cast<uint16_t>(*(addrL.value)) |
 			          (static_cast<uint16_t>(*(addrH.value)) << 8);
-		std::string typeName = "?";
-		if (type.value) {
-			switch (*(type.value)) {
-				case AbsoluteBinary: typeName = "Binary"; break;
-				case Comment:        typeName = "Comment"; break;
-				case End:            typeName = "End"; break;
-				case AutoExecute:    typeName = "AutoExec"; break;
-				case Data:           typeName = "Data"; break;
-				default:             typeName = "Unknown"; break;
-			}
-		}
+		auto typeName = GetTypeName();
+
 		return std::format("Name: {} Record: {} Type: {} Addr: {:04x} Length: {}",
 			n, rn, typeName, address, length);
 	}
