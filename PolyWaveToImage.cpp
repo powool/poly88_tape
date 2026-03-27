@@ -1648,7 +1648,7 @@ private:
 class MainWindow : public QMainWindow {
 	Q_OBJECT
 public:
-	MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
+	MainWindow(QWidget *parent = nullptr, QString fileName = "") : QMainWindow(parent) {
 		setWindowTitle("PolyWaveToImage");
 		resize(1200, 800);
 
@@ -1660,6 +1660,10 @@ public:
 		buildUI();
 
 		statusBar()->showMessage("Ready");
+
+		if (fileName.size()) {
+			LoadAudioFile(fileName);
+		}
 	}
 
 	AudioPtr audioPtr;
@@ -2655,12 +2659,7 @@ private slots:
 		selWaveByte2HexLabel->setText(toHex(sel.byte2.value));
 	}
 
-	void onLoad() {
-		QString fileName = QFileDialog::getOpenFileName(
-			this, "Open WAV File", QString(),
-			"WAV files (*.wav);;All files (*)");
-		if (fileName.isEmpty()) return;
-
+	void LoadAudioFile(QString fileName) {
 		try {
 			tape.GetFiles().clear();
 			refreshRecordTable();
@@ -2677,6 +2676,15 @@ private slots:
 			QMessageBox::critical(this, "Error loading file",
 				QString::fromStdString(e.what()));
 		}
+	}
+
+	void onLoad() {
+		QString fileName = QFileDialog::getOpenFileName(
+			this, "Open WAV File", QString(),
+			"WAV files (*.wav);;All files (*)");
+		if (fileName.isEmpty()) return;
+
+		LoadAudioFile(fileName);
 	}
 
 	void onSave() {
@@ -3100,8 +3108,14 @@ protected:
 int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
+	QString fileName;
 
-	MainWindow win;
+	if (argc == 2) {
+		fileName = argv[1];
+	}
+
+
+	MainWindow win(nullptr, fileName);
 	win.show();
 
 	return app.exec();
