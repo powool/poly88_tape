@@ -257,4 +257,7 @@ class KansasCity : public DataInterfaceBase {
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.
 	void TweakSettings() { ; }
+	double GetBitrateEstimate(TapeIndex tapeIndex, int waveformsToSample) override {
+		return 300;
+	}
 };

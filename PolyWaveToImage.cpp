@@ -1273,14 +1273,14 @@ private slots:
 
 		QAction *scanForRecordAction = contextMenu.addAction("Scan For Record");
 		QAction *scanAllFromHereAction = contextMenu.addAction("Scan All From Here");
-		QAction *scanForCarrierAction = contextMenu.addAction("Scan For Carrier");
+		QAction *getBitrateEstimate = contextMenu.addAction("Get Bitrate Estimate");
 
 		connect(scanForRecordAction, &QAction::triggered, this,
 			[this, idx]() { ScanForRecord(idx); });
 		connect(scanAllFromHereAction, &QAction::triggered, this,
 			[this, idx]() { ScanAllFromHere(idx); });
-		connect(scanForCarrierAction, &QAction::triggered, this,
-			[this, idx]() { ScanForCarrier(idx); });
+		connect(getBitrateEstimate, &QAction::triggered, this,
+			[this, idx]() { GetBitrateEstimate(idx); });
 
 		contextMenu.exec(mapToGlobal(pos));
 	}
@@ -1477,17 +1477,12 @@ private slots:
 		emit tapeDataChanged();
 	}
 
-	void ScanForCarrier(TapeIndex idx) {
-		try {
-			int bitRate = 4800;
-			auto result = audio->ScanForCarrier(idx, 200, bitRate);
-			// result.first is where we first found the carrier
-			idx = result.second;
-		} catch (const std::exception &e) {
-			std::cerr << "ScanForCarrier threw exception " << e.what() << std::endl;
-		}
+	void GetBitrateEstimate(TapeIndex tapeIndex) {
+		if (!dataInterface || !tape || !audio) return;
 
-		setScrollOffset(idx);
+		auto bitRate = dataInterface->GetBitrateEstimate(tapeIndex, 10);
+
+		emit statusMessage(QString("Estimated Bitrate: %1 (from 10 sequential waveform samples)").arg(bitRate));
 	}
 
 private:

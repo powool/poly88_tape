@@ -121,4 +121,22 @@ class PolyPhase : public DataInterfaceBase {
 	// Allow adjusting of bitrate, hysterisis values, and so on.
 	void TweakSettings() {
 	}
+
+	double GetBitrateEstimate(TapeIndex tapeIndex, int wavesToSample) override {
+		double meanBitrate = 0.0;
+		for (auto i = 0; i < wavesToSample ; i++) {
+			tapeIndex = audio->FindThisOrNextZeroCrossingDouble(tapeIndex, hysterisis);
+			auto tapeIndex1 = audio->FindThisOrNextZeroCrossingDouble(tapeIndex+1, hysterisis);
+			auto resultBitrate = static_cast<double>(audio->SampleRate()) / (tapeIndex1 - tapeIndex);
+			meanBitrate += resultBitrate;
+
+#if 0
+			std::cout << std::format("tapeIndex: {} value[index]: {}  value[index+1]: {}",
+					tapeIndex, audio->Value(tapeIndex), audio->Value(tapeIndex+1)) << std::endl;
+#endif
+			tapeIndex = audio->FindThisOrNextZeroCrossingDouble(tapeIndex1 + 1, hysterisis);
+		}
+
+		return meanBitrate / wavesToSample;
+	}
 };
