@@ -235,13 +235,11 @@ class KansasCity : public DataInterfaceBase {
 
 			result.endIndex = ourIndex;
 			result.value = resultByte;
-			result.confident = true;
 			return result;
 		}
 
 		result.endIndex = index;
 		result.value = 0;
-		result.confident = false;
 		return result;
 	}
 

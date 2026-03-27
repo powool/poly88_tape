@@ -83,7 +83,6 @@ struct TapeByte {
 	// them to be 0xE6, like the header.
 	bool override = false;
 	FieldType fieldType = FieldType::Data;
-	bool confident = true;  // false if decoder reported low confidence
 	std::vector<BitInfo> bits;  // per-bit positional data from decoder
 };
 
@@ -457,7 +456,6 @@ class Record {
 		tb.startIndex = result.startIndex;
 		tb.length = result.endIndex - result.startIndex;
 		tb.value = result.value;
-		tb.confident = result.confident;
 		tb.bits = std::move(result.bits);
 		return tb;
 	}
@@ -938,15 +936,12 @@ protected:
 					int ipx = static_cast<int>(px);
 
 					// Red override for low-confidence bytes
-					QColor color = tb->confident
-						? colorForFieldType(tb->fieldType)
-						: QColor(255, 0, 0);
+					QColor color =  colorForFieldType(tb->fieldType);
 					p.setPen(color);
 
 					// Taller ticks for SOH, header checksum, data checksum,
 					// or low-confidence bytes
-					bool isBoundary = (!tb->confident ||
-					                   tb->fieldType == FieldType::SOH ||
+					bool isBoundary = (tb->fieldType == FieldType::SOH ||
 					                   tb->fieldType == FieldType::HeaderChecksum ||
 					                   tb->fieldType == FieldType::DataChecksum);
 					int top = isBoundary ? tickTopTall : tickTopNormal;
@@ -977,9 +972,7 @@ protected:
 				for (auto *tb : allBytes) {
 					if (tb->bits.empty()) continue;
 
-					QColor color = tb->confident
-						? colorForFieldType(tb->fieldType)
-						: QColor(255, 0, 0);
+					QColor color = colorForFieldType(tb->fieldType);
 					color.setAlpha(120);
 					QPen pen(color, 2);
 					p.setPen(pen);

@@ -131,6 +131,20 @@ int Audio::FindThisOrNextZeroCrossing(int index, int hysterisis) {
 	return index;
 }
 
+double Audio::FindThisOrNextZeroCrossingDouble(int index, int hysterisis) {
+	auto crossingIndex = FindThisOrNextZeroCrossing(index, 0);
+	int thisSample = Value(crossingIndex);
+	int nextSample = Value(crossingIndex + 1);
+	if (thisSample > nextSample) {
+		throw std::runtime_error("backwards result from Audio::FindThisOrNextZeroCrossing");
+	}
+	if (thisSample >= 0 || nextSample < 0) {
+		throw std::runtime_error("wrong result from Audio::FindThisOrNextZeroCrossing()");
+	}
+	return static_cast<double>(crossingIndex) +
+		static_cast<double>(-thisSample) / (-thisSample + nextSample);
+}
+
 // This detects a negative to positive transition
 int Audio::FindThisOrPreviousZeroCrossing(int index, int hysterisis) {
 

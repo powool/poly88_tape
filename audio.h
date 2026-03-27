@@ -80,6 +80,7 @@ public:
 
 	// This detects a negative to positive transition
 	int FindThisOrNextZeroCrossing(int index, int hysterisis = 0);
+	double FindThisOrNextZeroCrossingDouble(int index, int hysterisis = 0);
 	int FindThisOrPreviousZeroCrossing(int index, int hysterisis = 0);
 
 	// This detects a positive to negative transition

@@ -11,7 +11,6 @@ struct ByteReadResult {
 	TapeIndex startIndex = 0;
 	TapeIndex endIndex = 0;
 	uint8_t value = 0;
-	bool confident = true;  // false if sync was lost or bits were ambiguous
 };
 
 struct BitInfo {
@@ -46,19 +45,9 @@ class DataInterface {
 	// signal transition.
 	virtual std::pair<TapeIndex, uint8_t> ReadByte(TapeIndex index) = 0;
 
-	// Read a single byte with detailed positional and confidence info.
-	// Default implementation wraps ReadByte.
-	virtual ByteReadResult ReadByteDetailed(TapeIndex index) {
-		auto result = ReadByte(index);
-		return { index, result.first, result.second, true };
-	}
-
 	// Read a single byte with per-bit positional data.
 	// Default implementation wraps ReadByteDetailed with no bit info.
-	virtual BitReadResult ReadByteWithBits(TapeIndex index) {
-		auto r = ReadByteDetailed(index);
-		return { r.startIndex, r.endIndex, r.value, r.confident, {} };
-	}
+	virtual BitReadResult ReadByteWithBits(TapeIndex index) = 0;
 
 	virtual TapeIndex Rewind() = 0;
 
@@ -67,6 +56,7 @@ class DataInterface {
 
 	virtual void SetDebugByte(bool d) = 0;
 	virtual void SetDebugBit(bool d) = 0;
+	virtual double GetBitrateEstimate(TapeIndex tapeIndex, int waveformsToSample) = 0;
 };
 
 using DataInterfacePtr = std::shared_ptr<DataInterface>;
