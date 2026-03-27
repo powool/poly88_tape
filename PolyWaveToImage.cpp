@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -65,6 +66,14 @@ enum class FieldType {
 };
 
 struct TapeByte {
+	enum TapeType {
+		AbsoluteBinary = 0x00,
+		Comment = 0x01,
+		End = 0x02,
+		AutoExecute = 0x03,
+		Data = 0x04
+	};
+
 	// WAV file index and length, in units of samples.
 	TapeIndex startIndex = 0, length = 0;
 	// no value means exactly that - it is unknown
@@ -106,14 +115,6 @@ class Record {
 	ScanStatus scanStatus = ScanStatus::NoLeader;
 	bool repairDataLength = false;
 
-	enum TapeType {
-		AbsoluteBinary = 0x00,
-		Comment = 0x01,
-		End = 0x02,
-		AutoExecute = 0x03,
-		Data = 0x04
-	};
-
     public:
 	ScanStatus GetScanStatus() const { return scanStatus; }
 
@@ -122,11 +123,11 @@ class Record {
 	std::string GetTypeName() const {
 		if (!type.value) return "?";
 		switch (*(type.value)) {
-			case AbsoluteBinary: return "Binary";
-			case Comment:        return "Comment";
-			case End:            return "End";
-			case AutoExecute:    return "AutoExec";
-			case Data:           return "Data";
+			case TapeByte::AbsoluteBinary: return "Binary";
+			case TapeByte::Comment:        return "Comment";
+			case TapeByte::End:            return "End";
+			case TapeByte::AutoExecute:    return "AutoExec";
+			case TapeByte::Data:           return "Data";
 			default:             return "Unknown";
 		}
 	}
@@ -198,11 +199,9 @@ class Record {
 
 		for (size_t i = 0; i < hdrBytes.size(); i++) {
 			if (hdrBytes[i]->value) {
-				char buf[4];
-				snprintf(buf, sizeof(buf), "%02x ", *(hdrBytes[i]->value));
-				result += buf;
-				uint8_t ch = *(hdrBytes[i]->value);
-				ascii += (ch >= 0x20 && ch <= 0x7e) ? static_cast<char>(ch) : '.';
+				result += std::format("{:02x} ", *(hdrBytes[i]->value));
+				char ch = *(hdrBytes[i]->value);
+				ascii += std::isprint(ch) ? ch : '.';
 			} else {
 				result += "?? ";
 				ascii += '.';
@@ -226,9 +225,7 @@ class Record {
 			uint16_t lineEnd = std::min(static_cast<uint16_t>(i + 16), len);
 			for (uint16_t j = i; j < lineEnd; j++) {
 				if (data[j].value) {
-					char buf[4];
-					snprintf(buf, sizeof(buf), "%02x ", *(data[j].value));
-					result += buf;
+					result += std::format("{:02x} ", *(data[j].value));
 				} else {
 					result += "?? ";
 				}
@@ -265,8 +262,11 @@ class Record {
 	// Return an ASCII representation of the header as a single line
 	std::string GetHeaderAsAscii() const {
 		std::string n;
+		n = GetName();
+#if 0
 		for (int i = 0; i < 8; i++)
 			n += name[i].value ? static_cast<char>(*(name[i].value)) : '?';
+#endif
 		uint16_t rn = 0;
 		if (rcdL.value && rcdH.value)
 			rn = static_cast<uint16_t>(*(rcdL.value)) |
@@ -286,13 +286,14 @@ class Record {
 	// Return a reference to the data vector for direct access
 	const std::vector<TapeByte> &GetData() const { return data; }
 
-	// Check if record type has data content (Binary, Data, or Comment)
+	// Check if record type has data content (Binary, Data, End, or Comment)
 	bool HasDataContent() const {
 		if (!type.value) return false;
 		switch (*(type.value)) {
-			case AbsoluteBinary:
-			case Data:
-			case Comment:
+			case TapeByte::AbsoluteBinary:
+			case TapeByte::Data:
+			case TapeByte::End:
+			case TapeByte::Comment:
 				return true;
 			default:
 				return false;
@@ -339,12 +340,12 @@ class Record {
 		}
 		if (!type.value) return false;
 		switch(*(type.value)) {
-			case AbsoluteBinary:
-			case Data:
+			case TapeByte::AbsoluteBinary:
+			case TapeByte::Data:
 				return DataChecksumIsValid();
-			case Comment:
-			case End:
-			case AutoExecute:
+			case TapeByte::Comment:
+			case TapeByte::End:
+			case TapeByte::AutoExecute:
 				return true;
 			default:
 				return false;
@@ -353,7 +354,7 @@ class Record {
 		return true;
 	}
 
-	std::string GetName() {
+	std::string GetName() const {
 		if (!NameIsValid()) return "";
 		std::string result;
 		for (int i = 0; i < 8; i++)
@@ -361,13 +362,13 @@ class Record {
 		return result;
 	}
 
-	bool NameIsValid() {
+	bool NameIsValid() const {
 		for (int i = 0; i < 8; i++)
 			if (!name[i].value) return false;
 		return true;
 	}
 
-	bool HeaderChecksumIsValid() {
+	bool HeaderChecksumIsValid() const {
 		if (!NameIsValid()) return false;
 		if (!rcdL.value) return false;
 		if (!rcdL.value) return false;
@@ -390,7 +391,7 @@ class Record {
 		return sum == 0;
 	}
 
-	bool DataChecksumIsValid() {
+	bool DataChecksumIsValid() const {
 		for (int i = 0; i < data.size(); i++)
 			if (!data[i].value) return false;;
 		uint8_t sum = 0;
@@ -600,7 +601,7 @@ enum class TapeFormat {
 
 struct MainWindowSettings {
 	bool invertSignal = false;
-	uint32_t bitrate = 4800;
+	uint32_t bitrate = 2400;
 	TapeFormat tapeFormat = TapeFormat::PolyPhase;
 	// Curve drag interpolation range, as a fraction of one bit-cell cycle.
 	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
@@ -716,8 +717,8 @@ public:
 			this, &WaveformView::showContextMenu);
 	}
 
-	void setDecoder(DataInterfacePtr decoder) {
-		this->decoder = decoder;
+	void SetDataInterface(DataInterfacePtr dataInterface) {
+		this->dataInterface = dataInterface;
 	}
 
 	void setAudio(AudioPtr a) {
@@ -738,7 +739,7 @@ public:
 	}
 
 	AudioPtr getAudio() const { return audio; }
-	DataInterfacePtr getDecoder() const { return decoder; }
+	DataInterfacePtr getDecoder() const { return dataInterface; }
 	const WaveformSelection &getSelection() const { return selection; }
 
 	void clearSelection() {
@@ -747,14 +748,17 @@ public:
 		emit selectionChanged(selection);
 	}
 
-	void computeSelection(TapeIndex startIdx) {
-		if (!decoder) return;
+	void computeSelection(TapeIndex startIdx, bool rewind = true) {
+		if (!dataInterface) return;
 		selection = WaveformSelection();
 		try {
-			// reset "last bit" to zero:
-			decoder->Rewind();
-			selection.byte1 = decoder->ReadByteWithBits(startIdx);
-			selection.byte2 = decoder->ReadByteWithBits(selection.byte1.endIndex);
+			if (rewind) {
+				// reset "last bit" to zero (required if
+				// we randomly changed startindex).
+				dataInterface->Rewind();
+			}
+			selection.byte1 = dataInterface->ReadByteWithBits(startIdx);
+			selection.byte2 = dataInterface->ReadByteWithBits(selection.byte1.endIndex);
 			selection.startIndex = startIdx;
 			// Set end to the end of the last bit of byte2
 			if (!selection.byte2.bits.empty()) {
@@ -1044,7 +1048,7 @@ protected:
 
 	void mouseMoveEvent(QMouseEvent *event) override {
 		if (selectionDragging && audio) {
-			double samp = pixelToSample(static_cast<int>(event->position().x()));
+			TapeIndex samp = pixelToSample(event->position().x());
 			computeSelection(samp);
 		} else if (curveDragging && audio) {
 			// Curve drag: vertical mouse delta applies a smoothed offset
@@ -1089,8 +1093,8 @@ protected:
 
 			if (ctrl && audio) {
 				// Ctrl+drag: set waveform selection start and begin drag
-				double clickSample = pixelToSample(
-					static_cast<int>(event->position().x()));
+				TapeIndex clickSample = pixelToSample(
+					event->position().x());
 				computeSelection(clickSample);
 				selectionDragging = true;
 				setCursor(Qt::SizeHorCursor);
@@ -1222,9 +1226,9 @@ protected:
 		if (event->key() == Qt::Key_Right && noMods) {
 			// Move selection to next zero crossing
 			try {
-				int newIdx = audio->FindThisOrNextTransition(
-					static_cast<int>(selection.startIndex) + 1);
-				computeSelection(static_cast<TapeIndex>(newIdx));
+				TapeIndex newIdx = audio->FindThisOrNextTransition(
+					selection.startIndex + 1);
+				computeSelection(newIdx);
 				scrollToFollow(newIdx);
 			} catch (...) {}
 			event->accept();
@@ -1236,9 +1240,9 @@ protected:
 				return;
 			}
 			try {
-				int newIdx = audio->FindThisOrPreviousTransition(
-					static_cast<int>(selection.startIndex) - 1);
-				computeSelection(static_cast<TapeIndex>(newIdx));
+				TapeIndex newIdx = audio->FindThisOrPreviousTransition(
+					selection.startIndex - 1);
+				computeSelection(newIdx);
 				scrollToFollow(newIdx);
 			} catch (...) {}
 			event->accept();
@@ -1246,7 +1250,7 @@ protected:
 		} else if (event->key() == Qt::Key_Right && ctrlOnly) {
 			// Move selection right by one byte boundary
 			TapeIndex newIdx = selection.byte1.endIndex;
-			computeSelection(newIdx);
+			computeSelection(newIdx, false);
 			scrollToFollow(newIdx);
 			event->accept();
 			return;
@@ -1255,10 +1259,10 @@ protected:
 			double samplesPerBit = (settings && settings->bitrate > 0)
 				? static_cast<double>(audio->SampleRate()) / settings->bitrate
 				: 40.0;
-			int delta = static_cast<int>(samplesPerBit * 8);
-			int newIdx = std::max(0, static_cast<int>(selection.startIndex) - delta);
+			TapeIndex delta = samplesPerBit * 8;
+			TapeIndex newIdx = std::max(0.0, selection.startIndex - delta);
 			try {
-				computeSelection(static_cast<TapeIndex>(newIdx));
+				computeSelection(newIdx);
 				scrollToFollow(newIdx);
 			} catch (...) {}
 			event->accept();
@@ -1289,11 +1293,11 @@ private slots:
 	}
 
 	void ScanForRecord(TapeIndex idx) {
-		if (!decoder || !tape) return;
+		if (!dataInterface || !tape) return;
 
 		Record record;
 		if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
-		auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
+		auto [nextIdx, status] = record.ReadFromDecoder(dataInterface, idx);
 
 		if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader ||
 			status == ScanStatus::NoSOH) {
@@ -1400,7 +1404,7 @@ private slots:
 	}
 
 	void ScanAllFromHere(TapeIndex idx) {
-		if (!decoder || !tape || !audio) return;
+		if (!dataInterface || !tape || !audio) return;
 
 		QApplication::setOverrideCursor(Qt::WaitCursor);
 
@@ -1432,7 +1436,7 @@ private slots:
 		while (idx < audio->SampleCount()) {
 			Record record;
 			if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
-			auto [nextIdx, status] = record.ReadFromDecoder(decoder, idx);
+			auto [nextIdx, status] = record.ReadFromDecoder(dataInterface, idx);
 
 			if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
 				break;
@@ -1494,7 +1498,7 @@ private slots:
 	}
 
 private:
-	DataInterfacePtr decoder;
+	DataInterfacePtr dataInterface;
 	AudioPtr audio;
 	Tape *tape = nullptr;
 	const MainWindowSettings *settings = nullptr;
@@ -1671,6 +1675,7 @@ public:
 	}
 
 	AudioPtr audioPtr;
+	DataInterfacePtr dataInterface;
 
 private:
 	MainWindowSettings settings;
@@ -2094,9 +2099,9 @@ private slots:
 		}
 	}
 
-	DataInterfacePtr createDecoder() {
+	DataInterfacePtr CreateDataInterface() {
 		if (!audioPtr) return nullptr;
-		int hysterisis = 200;
+		int hysterisis = 600;
 		int bitrate = static_cast<int>(settings.bitrate);
 		if (settings.tapeFormat == TapeFormat::KansasCity) {
 			hysterisis = 0;
@@ -2672,9 +2677,10 @@ private slots:
 			tape.GetFiles().clear();
 			refreshRecordTable();
 			audioPtr = std::make_shared<Audio>(fileName.toStdString());
+			dataInterface = CreateDataInterface();
 			applyAudioSettings();
 			waveformView->setAudio(audioPtr);
-			waveformView->setDecoder(createDecoder());
+			waveformView->SetDataInterface(dataInterface);
 			waveformView->setTape(&tape);
 			statusBar()->showMessage(
 				"Loaded: " + fileName +
@@ -2725,7 +2731,8 @@ private slots:
 			if (audioPtr) {
 				applyAudioSettings();
 				if (settings.tapeFormat != previousFormat) {
-					waveformView->setDecoder(createDecoder());
+					dataInterface = CreateDataInterface();
+					waveformView->SetDataInterface(dataInterface);
 					statusBar()->showMessage(
 						QString("Tape format changed to %1")
 						.arg(settings.tapeFormat == TapeFormat::KansasCity
@@ -2747,7 +2754,7 @@ private slots:
 		// Clear existing tape data
 		tape.GetFiles().clear();
 
-		DataInterfacePtr dec = createDecoder();
+		DataInterfacePtr dec = CreateDataInterface();
 		TapeIndex idx = 0;
 		int recordCount = 0;
 		int errorCount = 0;
@@ -2854,8 +2861,8 @@ private slots:
 			return;
 		}
 
-		DataInterfacePtr dec = waveformView->getDecoder();
-		if (!dec) {
+		DataInterfacePtr dataInterface = waveformView->getDecoder();
+		if (!dataInterface) {
 			statusBar()->showMessage("No decoder available.");
 			return;
 		}
@@ -2902,7 +2909,7 @@ private slots:
 		}
 
 		QApplication::setOverrideCursor(Qt::WaitCursor);
-		statusBar()->showMessage("Searching...");
+		statusBar()->showMessage(QString("Searching for %1 bytes...").arg(searchBytes.size()));
 		QApplication::processEvents();
 
 		int patternLen = searchBytes.size();
@@ -2923,7 +2930,7 @@ private slots:
 
 			for (int p = 0; p < patternLen; p++) {
 				try {
-					auto [nextIdx, byteVal] = dec->ReadByte(readIdx);
+					auto [nextIdx, byteVal] = dataInterface->ReadByte(readIdx);
 					uint8_t expected = static_cast<uint8_t>(searchBytes[p]);
 					if (byteVal != expected) {
 						match = false;
@@ -2957,6 +2964,8 @@ private slots:
 					if (prevIdx >= idx) break; // no progress
 					idx = prevIdx;
 				}
+				// reset 'last bit' to zero
+				dataInterface->Rewind();
 			} catch (...) {
 				break;
 			}
