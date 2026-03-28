@@ -599,7 +599,8 @@ enum class TapeFormat {
 
 struct MainWindowSettings {
 	bool invertSignal = false;
-	uint32_t bitrate = 2400;
+	int bitrate = 2400;
+	int hysterisis = 200;	// used by polyphase, not Byte
 	TapeFormat tapeFormat = TapeFormat::PolyPhase;
 	// Curve drag interpolation range, as a fraction of one bit-cell cycle.
 	// 0.25 = 1/4 cycle.  Valid range roughly 0.1 .. 1.0.
@@ -626,9 +627,14 @@ public:
 		layout->addRow("Invert Signal", invertSignalCheckBox);
 
 		bitrateSpin = new QSpinBox(this);
-		bitrateSpin->setRange(300, 100000);
+		bitrateSpin->setRange(200, 10000);
 		bitrateSpin->setValue(static_cast<int>(settingsRef.bitrate));
 		layout->addRow("Bitrate", bitrateSpin);
+
+		hysterisisSpin = new QSpinBox(this);
+		hysterisisSpin->setRange(0, 16384);
+		hysterisisSpin->setValue(static_cast<int>(settingsRef.hysterisis));
+		layout->addRow("Hysterisis", hysterisisSpin);
 
 		tapeFormatCombo = new QComboBox(this);
 		tapeFormatCombo->addItem("Poly-88 Phase Encoding", static_cast<int>(TapeFormat::PolyPhase));
@@ -667,7 +673,8 @@ public:
 
 	void accept() override {
 		settingsRef.invertSignal = invertSignalCheckBox->isChecked();
-		settingsRef.bitrate = static_cast<uint32_t>(bitrateSpin->value());
+		settingsRef.bitrate = static_cast<int>(bitrateSpin->value());
+		settingsRef.hysterisis = static_cast<int>(hysterisisSpin->value());
 		settingsRef.tapeFormat = static_cast<TapeFormat>(tapeFormatCombo->currentIndex());
 		settingsRef.curveDragRange = curveDragRangeSpin->value();
 		settingsRef.invertMouseWheelScroll = invertMouseWheelScrollCheckBox->isChecked();
@@ -680,6 +687,7 @@ private:
 	MainWindowSettings &settingsRef;
 	QCheckBox *invertSignalCheckBox;
 	QSpinBox *bitrateSpin;
+	QSpinBox *hysterisisSpin;
 	QComboBox *tapeFormatCombo;
 	QDoubleSpinBox *curveDragRangeSpin;
 	QCheckBox *invertMouseWheelScrollCheckBox;
@@ -2091,15 +2099,13 @@ private slots:
 		}
 	}
 
+	// interface factory
 	DataInterfacePtr CreateDataInterface() {
 		if (!audioPtr) return nullptr;
-		int hysterisis = 600;
-		int bitrate = static_cast<int>(settings.bitrate);
 		if (settings.tapeFormat == TapeFormat::KansasCity) {
-			hysterisis = 0;
-			return std::make_shared<KansasCity>(audioPtr, bitrate, hysterisis);
+			return std::make_shared<KansasCity>(audioPtr, settings.bitrate, settings.hysterisis);
 		} else {
-			return std::make_shared<PolyPhase>(audioPtr, bitrate, hysterisis);
+			return std::make_shared<PolyPhase>(audioPtr, settings.bitrate, settings.hysterisis);
 		}
 	}
 
