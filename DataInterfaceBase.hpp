@@ -6,6 +6,7 @@ class DataInterfaceBase : public DataInterface {
     protected:
 	AudioPtr audio;
 	int bitRate = 0;
+
 	int samplesPerBit = 0;
 	int hysterisis = 0;
 
@@ -19,6 +20,10 @@ class DataInterfaceBase : public DataInterface {
 		bitRate(bitRate)
 	{
 		samplesPerBit = audio->SamplesPerBit(bitRate);
+#if 0
+		std::cout << std::format("DataInterfaceBase: samplesPerBit: {}",
+				samplesPerBit) << std::endl;
+#endif
 	}
 
 	LeaderResult FindEndOfNextLeaderInternal(TapeIndex tapeIndex) {
@@ -40,8 +45,7 @@ class DataInterfaceBase : public DataInterface {
 	}
 
 	// Read and re-sync as needed until we read a series of 0xe6 bytes.
-	// Return the tape index and first non-0xe6 byte. This is slow, so
-	// make sure to find the carrier before calling this.
+	// Return the tape index and first non-0xe6 byte.
 	LeaderResult FindEndOfNextLeader(TapeIndex tapeIndex) {
 		std::pair<TapeIndex, uint8_t> readResult;
 

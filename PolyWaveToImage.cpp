@@ -1251,7 +1251,7 @@ protected:
 		} else if (event->key() == Qt::Key_Right && ctrlOnly) {
 			// Move selection right by one byte boundary
 			TapeIndex newIdx = selection.byte1.endIndex;
-			computeSelection(newIdx, false);
+			computeSelection(newIdx);
 			scrollToFollow(newIdx);
 			event->accept();
 			return;
@@ -1259,7 +1259,7 @@ protected:
 			// Move selection left by approximately one byte (samplesPerBit heuristic)
 			double samplesPerBit = (settings && settings->bitrate > 0)
 				? static_cast<double>(audio->SampleRate()) / settings->bitrate
-				: 40.0;
+				: 80.0;
 			TapeIndex delta = samplesPerBit * 8;
 			TapeIndex newIdx = std::max(0.0, selection.startIndex - delta);
 			try {
@@ -2732,14 +2732,22 @@ private slots:
 		if (dlg.exec() == QDialog::Accepted) {
 			if (audioPtr) {
 				applyAudioSettings();
+
+				// Always construct a new data interface to
+				// ensure it picks up all changed settings.
+				dataInterface = CreateDataInterface();
+
+				// give waveformview a copy of our interface pointer
+				waveformView->SetDataInterface(dataInterface);
+
+				// eye candy, isn't really all that useful
 				if (settings.tapeFormat != previousFormat) {
-					dataInterface = CreateDataInterface();
-					waveformView->SetDataInterface(dataInterface);
 					statusBar()->showMessage(
 						QString("Tape format changed to %1")
 						.arg(settings.tapeFormat == TapeFormat::KansasCity
 							? "Kansas City Standard" : "Poly-88 Phase Encoding"));
 				}
+
 				waveformView->update();
 			}
 		}
@@ -2756,7 +2764,6 @@ private slots:
 		// Clear existing tape data
 		tape.GetFiles().clear();
 
-		DataInterfacePtr dec = CreateDataInterface();
 		TapeIndex idx = 0;
 		int recordCount = 0;
 		int errorCount = 0;
@@ -2768,7 +2775,7 @@ private slots:
 		while (idx < audioPtr->SampleCount()) {
 			Record record;
 			record.SetRepairDataLength(settings.autoRepairHeaderLength);
-			auto [nextIdx, status] = record.ReadFromDecoder(dec, idx);
+			auto [nextIdx, status] = record.ReadFromDecoder(dataInterface, idx);
 
 			if (status == ScanStatus::AudioEOF) {
 				break;
@@ -2863,7 +2870,6 @@ private slots:
 			return;
 		}
 
-		DataInterfacePtr dataInterface = waveformView->getDecoder();
 		if (!dataInterface) {
 			statusBar()->showMessage("No decoder available.");
 			return;
@@ -2889,11 +2895,9 @@ private slots:
 			startIdx = sel.startIndex;
 			try {
 				if (direction > 0) {
-					startIdx = audioPtr->FindThisOrNextTransition(
-						static_cast<int>(startIdx) + 1);
+					startIdx += audioPtr->SamplesPerBit(settings.bitrate);
 				} else {
-					startIdx = audioPtr->FindThisOrPreviousTransition(
-						static_cast<int>(startIdx) - 1);
+					startIdx -= audioPtr->SamplesPerBit(settings.bitrate);
 				}
 			} catch (...) {}
 		} else {
@@ -2952,21 +2956,13 @@ private slots:
 				break;
 			}
 
-			// Advance by one signal transition
 			try {
 				if (direction > 0) {
-					TapeIndex nextIdx = audioPtr->FindThisOrNextTransition(
-						static_cast<int>(idx) + 1);
-					if (nextIdx <= idx) break; // no progress
-					idx = nextIdx;
+					idx += audioPtr->SamplesPerBit(settings.bitrate) / 8.0;
 				} else {
 					if (idx < 1) break;
-					TapeIndex prevIdx = audioPtr->FindThisOrPreviousTransition(
-						static_cast<int>(idx) - 1);
-					if (prevIdx >= idx) break; // no progress
-					idx = prevIdx;
+					idx -= audioPtr->SamplesPerBit(settings.bitrate) / 8.0;
 				}
-				// reset 'last bit' to zero
 				dataInterface->Rewind();
 			} catch (...) {
 				break;

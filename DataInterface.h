@@ -7,6 +7,13 @@
 
 using TapeIndex = double;
 
+// Throw on loss of syncronization in
+// ByteRead.
+class ByteSync : public std::runtime_error {
+public:
+        ByteSync(const char *s) : std::runtime_error(s) {;}
+};
+
 struct ByteReadResult {
 	TapeIndex startIndex = 0;
 	TapeIndex endIndex = 0;
@@ -23,7 +30,6 @@ struct BitReadResult {
 	TapeIndex startIndex = 0;
 	TapeIndex endIndex = 0;
 	uint8_t value = 0;
-	bool confident = true;
 	std::vector<BitInfo> bits;  // per-bit positional data (MSB ordering matches decoder)
 };
 
