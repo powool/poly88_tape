@@ -114,11 +114,11 @@ class Record {
 
 	TapeIndex GetSOHIndex() const;
 
-	TapeIndex GetStartIndex();
+	TapeIndex GetStartIndex() const;
 
-	TapeIndex GetEndIndex();
+	TapeIndex GetEndIndex() const;
 
-	uint16_t GetRecordNumber();
+	uint16_t GetRecordNumber() const;
 
 	bool RecordIsValid();
 
@@ -134,7 +134,7 @@ class Record {
 	std::vector<const TapeByte *> GetAllBytes() const;
 
 	// Check if a sample index falls within this record
-	bool ContainsIndex(TapeIndex idx);
+	bool ContainsIndex(TapeIndex idx) const;
 
 	// Find which TapeByte (field name) a sample index corresponds to
 	std::string FieldNameAtIndex(TapeIndex idx);

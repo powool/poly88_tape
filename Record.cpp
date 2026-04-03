@@ -192,7 +192,7 @@ TapeIndex Record::GetSOHIndex() const {
 	return soh.startIndex;
 }
 
-TapeIndex Record::GetStartIndex() {
+TapeIndex Record::GetStartIndex() const {
 	if (soh.startIndex > 0) {
 		return soh.startIndex;
 	}
@@ -202,7 +202,7 @@ TapeIndex Record::GetStartIndex() {
 	return 0;
 }
 
-TapeIndex Record::GetEndIndex() {
+TapeIndex Record::GetEndIndex() const {
 	if (data.size() && csData.length > 0) {
 		return csData.startIndex + csData.length;
 	}
@@ -212,7 +212,7 @@ TapeIndex Record::GetEndIndex() {
 	return GetStartIndex();
 }
 
-uint16_t Record::GetRecordNumber() {
+uint16_t Record::GetRecordNumber() const {
 	if (rcdL.value && rcdH.value)
 		return static_cast<uint16_t>(*(rcdL.value)) |
 		       (static_cast<uint16_t>(*(rcdH.value)) << 8);
@@ -308,7 +308,7 @@ std::vector<const TapeByte *> Record::GetAllBytes() const {
 }
 
 // Check if a sample index falls within this record
-bool Record::ContainsIndex(TapeIndex idx) {
+bool Record::ContainsIndex(TapeIndex idx) const {
 	return idx >= GetStartIndex() && idx < GetEndIndex();
 }
 

@@ -875,77 +875,17 @@ private slots:
 		if (!dataInterface || !tape || !audio) return;
 
 		QApplication::setOverrideCursor(Qt::WaitCursor);
-
-		// Remove existing records whose start index is >= idx
-		for (auto &file : tape->GetFiles()) {
-			auto &recs = file.GetRecords();
-			recs.erase(
-				std::remove_if(recs.begin(), recs.end(),
-					[idx](Record &r) { return r.GetStartIndex() >= idx; }),
-				recs.end());
-		}
-		// Remove empty files
-		auto &files = tape->GetFiles();
-		files.erase(
-			std::remove_if(files.begin(), files.end(),
-				[](File &f) { return f.GetRecords().empty(); }),
-			files.end());
-
-		// Scan from idx until EOF
-		std::string currentFileName;
-		File *currentFile = files.empty() ? nullptr : &files.back();
-		if (currentFile && currentFile->GetRecords().size()) {
-			currentFileName = currentFile->GetRecords()[0].GetName();
-		}
-
-		int recordCount = 0;
-		int lastRecNum = -1;
-		bool lastHdrOk = false;
-		while (idx < audio->SampleCount()) {
-			Record record;
-			if (settings) record.SetRepairDataLength(settings->autoRepairHeaderLength);
-			auto [nextIdx, status] = record.ReadFromDecoder(dataInterface, idx);
-
-			if (status == ScanStatus::AudioEOF || status == ScanStatus::NoLeader) {
-				break;
-			}
-
-			recordCount++;
-			std::string recName = record.GetName();
-			uint16_t recNum = record.GetRecordNumber();
-			bool hdrOk = record.HeaderChecksumIsValid();
-
-			bool startNewFile = false;
-			if (!currentFile || recName != currentFileName) {
-				startNewFile = true;
-			} else if (recName == currentFileName && hdrOk) {
-				// Same name but record number reset to 0
-				if (recNum == 0 && lastRecNum >= 0) {
-					startNewFile = true;
-				}
-				// Same name but record number decreased and both checksums ok
-				else if (lastRecNum >= 0 && recNum < lastRecNum && lastHdrOk) {
-					startNewFile = true;
-				}
-			}
-
-			if (startNewFile) {
-				files.emplace_back();
-				currentFile = &files.back();
-				currentFileName = recName;
-			}
-
-			lastRecNum = recNum;
-			lastHdrOk = hdrOk;
-			currentFile->GetRecords().push_back(std::move(record));
-
-			emit statusMessage(QString("Scanning: %1 record %2 (%3 found)")
-				.arg(QString::fromStdString(recName).trimmed())
-				.arg(recNum).arg(recordCount));
-			QApplication::processEvents();
-
-			idx = nextIdx;
-		}
+		tape->SetScanDecoder(dataInterface);
+		tape->SetRepairDataLength(settings && settings->autoRepairHeaderLength);
+		tape->Scan(idx, audio->SampleCount(),
+			[this](const std::string &fileName, uint16_t recNum, int found, int errors) {
+				emit statusMessage(QString("Scanning: %1 record %2 (%3 found, %4 errors)")
+					.arg(QString::fromStdString(fileName).trimmed())
+					.arg(recNum)
+					.arg(found)
+					.arg(errors));
+				QApplication::processEvents();
+			});
 
 		QApplication::restoreOverrideCursor();
 		update();
@@ -2228,73 +2168,23 @@ private slots:
 
 		QApplication::setOverrideCursor(Qt::WaitCursor);
 
-		// Clear existing tape data
-		tape.GetFiles().clear();
-
-		TapeIndex idx = 0;
+		tape.SetScanDecoder(dataInterface);
+		tape.SetRepairDataLength(settings.autoRepairHeaderLength);
 		int recordCount = 0;
 		int errorCount = 0;
-		std::string currentFileName;
-		File *currentFile = nullptr;
-		int lastRecNum = -1;
-		bool lastHdrOk = false;
-
-		while (idx < audioPtr->SampleCount()) {
-			Record record;
-			record.SetRepairDataLength(settings.autoRepairHeaderLength);
-			auto [nextIdx, status] = record.ReadFromDecoder(dataInterface, idx);
-
-			if (status == ScanStatus::AudioEOF) {
-				break;
-			}
-
-			if (status == ScanStatus::NoLeader) {
-				// Could not find leader at all — we're done
-				break;
-			}
-
-			recordCount++;
-
-			// Group records into Files by name continuity,
-			// starting a new File when record number resets/decreases
-			std::string recName = record.GetName();
-			uint16_t recNum = record.GetRecordNumber();
-			bool hdrOk = record.HeaderChecksumIsValid();
-
-			bool startNewFile = false;
-			if (!currentFile || recName != currentFileName) {
-				startNewFile = true;
-			} else if (recName == currentFileName && hdrOk) {
-				if (recNum == 0 && lastRecNum >= 0) {
-					startNewFile = true;
-				} else if (lastRecNum >= 0 && recNum < lastRecNum && lastHdrOk) {
-					startNewFile = true;
-				}
-			}
-
-			if (startNewFile) {
-				tape.GetFiles().emplace_back();
-				currentFile = &tape.GetFiles().back();
-				currentFileName = recName;
-			}
-
-			lastRecNum = recNum;
-			lastHdrOk = hdrOk;
-			currentFile->GetRecords().push_back(std::move(record));
-
-			if (status != ScanStatus::Ok) {
-				errorCount++;
-			}
-
-			statusBar()->showMessage(
-				QString("Scanning: %1 record %2 (%3 found, %4 errors)")
-				.arg(QString::fromStdString(recName).trimmed())
-				.arg(recNum)
-				.arg(recordCount).arg(errorCount));
-			QApplication::processEvents();
-
-			idx = nextIdx;
-		}
+		tape.Scan(0, audioPtr->SampleCount(),
+			[this, &recordCount, &errorCount](
+				const std::string &fileName, uint16_t recNum, int found, int errors) {
+				recordCount = found;
+				errorCount = errors;
+				statusBar()->showMessage(
+					QString("Scanning: %1 record %2 (%3 found, %4 errors)")
+						.arg(QString::fromStdString(fileName).trimmed())
+						.arg(recNum)
+						.arg(found)
+						.arg(errors));
+				QApplication::processEvents();
+			});
 
 		QApplication::restoreOverrideCursor();
 		waveformView->setTape(&tape);

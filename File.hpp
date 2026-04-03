@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <format>
@@ -27,6 +28,17 @@ class File {
 
 	std::vector<Record> &GetRecords() { return records; }
 	const std::vector<Record> &GetRecords() const { return records; }
+
+	bool RemoveRecord(TapeIndex idx, bool removeAfter) {
+		auto oldSize = records.size();
+		records.erase(
+			std::remove_if(records.begin(), records.end(),
+				[idx, removeAfter](const Record &r) {
+					return removeAfter ? (r.GetStartIndex() >= idx) : r.ContainsIndex(idx);
+				}),
+			records.end());
+		return records.size() != oldSize;
+	}
 
 	bool ContainsIndex(TapeIndex idx) {
 		return idx >= GetStartIndex() && idx < GetEndIndex();
