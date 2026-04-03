@@ -1,11 +1,20 @@
 #pragma once
 
+#include <format>
+
 #include "DataInterfaceBase.hpp"
+
+// #define DEBUG
 
 class PolyPhase : public DataInterfaceBase {
 	TapeIndex lastReturnedIndex = 0;
 	TapeIndex rewindIndex;
+	bool syncIfPossible = false;
 	int lastBit = 0;
+
+	int adaptiveBitCount = 0;
+	TapeIndex adaptiveBitStart = 0;
+	double adaptiveSamplesPerBit = 0;
 
 	// See http://www.kazojc.com/elementy_czynne/IC/8T20.pdf
 	//
@@ -15,29 +24,58 @@ class PolyPhase : public DataInterfaceBase {
 	// is on the 1->0 transition.
 	std::pair<TapeIndex, uint8_t> ReadBit(TapeIndex tapeIndex) {
 		TapeIndex startingIndex = tapeIndex;
-		// look ahead .75 waveform to see what the value is there and record it
-		TapeIndex oneShotTriggerIndex = tapeIndex + .75 * samplesPerBit;
+		if (adaptiveSamplesPerBit == 0.0) {
+			adaptiveSamplesPerBit = samplesPerBit;
+		}
+		// look ahead .75 adaptiveSamplesPerBit to see what the value is there and record it
+		TapeIndex oneShotTriggerIndex = tapeIndex + .75 * adaptiveSamplesPerBit;
 
 		// if we rewind or seek to a new location, we have
-		// to set our previous bit to zero
+		// to set our previous bit to 1
 		if (startingIndex != lastReturnedIndex) {
-			lastBit = 0;
+			syncIfPossible = false;
 		}
 
 		uint8_t resultBit = audio->Value(oneShotTriggerIndex) > hysterisis;
 
+#ifdef DEBUG
+		std::cout << std::format("ReadBit: samplesPerBit: {} oneshot: {}, value: {}, adaptiveSamplesPerBit: {:.7f}",
+				samplesPerBit,
+				oneShotTriggerIndex,
+				audio->Value(oneShotTriggerIndex),
+				adaptiveSamplesPerBit) << std::endl;
+#endif
+
 		// see if we can re-sync exactly
-		if (lastBit == 0 && resultBit == 0) {
+		if (syncIfPossible && lastBit == 0 && resultBit == 0) {
 			tapeIndex = audio->FindNearestZeroCrossing(oneShotTriggerIndex, bitRate, hysterisis);
-		} else if (lastBit == 1 && resultBit == 0) {
+		} else if (syncIfPossible && lastBit == 1 && resultBit == 0) {
 			// Closed loop:
 			//
 			// Here, due to the encoding, we guarantee that the following transition will
 			// be the beginning of a bit cell. Find it and reset our cell index to that transition.
+			// This might be the previous transition, not the next one
 			tapeIndex = audio->FindThisOrNextTransition(oneShotTriggerIndex, hysterisis);
+//			tapeIndex += adaptiveSamplesPerBit;
+#if 0
+			std::cout << std::format("ReadBit: sync from one shot: {} to new tape index: {}",
+				oneShotTriggerIndex,tapeIndex) << std::endl;
+#endif
+
+			if (adaptiveBitStart != 0) {
+				adaptiveSamplesPerBit = (tapeIndex - adaptiveBitStart) / adaptiveBitCount;
+#ifdef DEBUG
+				std::cout << std::format("tapeIndex: {}", tapeIndex) << std::endl;
+				std::cout << std::format("adaptiveBitStart: {}", adaptiveBitStart) << std::endl;
+				std::cout << std::format("adaptiveSamplesPerBit: {}", adaptiveSamplesPerBit) << std::endl;
+#endif
+			} else {
+				adaptiveBitStart = tapeIndex;
+				adaptiveBitCount = 0;
+			}
 		} else {
 			// Open loop clocking
-			tapeIndex += samplesPerBit;
+			tapeIndex += adaptiveSamplesPerBit;
 		}
 
 		if (debugBit) {
@@ -53,6 +91,8 @@ class PolyPhase : public DataInterfaceBase {
 
 		lastBit = resultBit;
 		lastReturnedIndex = tapeIndex;
+		adaptiveBitCount++;
+		syncIfPossible = true;
 		return std::make_pair(tapeIndex, resultBit);
 	}
 
@@ -72,7 +112,9 @@ class PolyPhase : public DataInterfaceBase {
 	//
 	// Polyphase is 8 bits, no parity, no start/stop bits
 	std::pair<TapeIndex, uint8_t> ReadByte(TapeIndex tapeIndex) {
-
+#ifdef DEBUG
+		std::cout << std::format("ReadByte: last bit: {}", (uint16_t) lastBit) << std::endl;
+#endif
 		std::pair<TapeIndex, uint8_t> result;
 		uint8_t resultByte = 0;
 
@@ -95,9 +137,17 @@ class PolyPhase : public DataInterfaceBase {
 		result.startIndex = tapeIndex;
 		uint8_t resultByte = 0;
 
+#ifdef DEBUG
+		std::cout << std::format("ReadByteWithBits: last bit: {}", (uint16_t) lastBit) << std::endl;
+		std::cout << std::format("ReadByteWithBits: hysterisis: {}", hysterisis) << std::endl;
+#endif
+
 		for (auto i = 0; i < 8; i++) {
 			TapeIndex bitStart = tapeIndex;
 			auto bit = ReadBit(tapeIndex);
+#ifdef DEBUG
+			std::cout << std::format("ReadByteWithBits: bit: {}, got index: {}, value: {}", i, bit.first, (uint16_t) bit.second) << std::endl;
+#endif
 			if (i == 1) {
 				rewindIndex = tapeIndex;
 			}
@@ -109,12 +159,16 @@ class PolyPhase : public DataInterfaceBase {
 		}
 		result.endIndex = tapeIndex;
 		result.value = resultByte;
-		result.confident = true;
 		return result;
 	}
 
 	TapeIndex Rewind() {
+		adaptiveBitCount = 0;
+		adaptiveBitStart = 0;
+		adaptiveSamplesPerBit = samplesPerBit;
+
 		lastBit = 0;
+		syncIfPossible = false;
 		return rewindIndex;
 	}
 
