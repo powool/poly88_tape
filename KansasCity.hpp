@@ -15,76 +15,67 @@ class KansasCity : public DataInterfaceBase {
 	// Attempt to count accurately by measuring wavelength between
 	// each full wave.
 	std::pair<TapeIndex, int> ReadBit(TapeIndex index) {
-		int allowedSampleSkew = .1 * samplesPerBit;
+		TapeIndex allowedSampleSkew = .1 * samplesPerBit;
 
 		// ensure we are at a zero crossing
 		index = audio->FindThisOrNextZeroCrossing(index, hysterisis);
 
-		while (index < audio->SampleCount() - samplesPerBit * 2) {
-			TapeIndex startingIndex = index;
+		TapeIndex startingIndex = index;
 
-			// Skip 4 full cycles - if it is a 1200Hz tone, we'll be
-			// seeing the full samplesPerBit number of samples.
-			int startOfBitIndex = index;
+		// Skip 4 full cycles - if it is a 1200Hz tone, we'll be
+		// seeing the full samplesPerBit number of samples.
+		TapeIndex startOfBitIndex = index;
+		for (int i = 0; i < 4; i++) {
+			// find next zero crossing
+			index = audio->FindThisOrNextZeroCrossing(index + 1, hysterisis);
+		}
+
+		int resultBit;
+		// if that happened over a samplesPerBit time span, then we have a 0 bit:
+		if (std::abs(index - startOfBitIndex - samplesPerBit) < allowedSampleSkew) {
+			resultBit = 0;
+		} else {
+			// consume another 4 full cycles
 			for (int i = 0; i < 4; i++) {
-				// find next zero crossing
 				index = audio->FindThisOrNextZeroCrossing(index + 1, hysterisis);
 			}
 
-			int resultBit;
-			// if that happened over a samplesPerBit time span, then we have a 0 bit:
+			// if the 8 full cycles happen over a samplesPerBit time span, then we have a 1 bit
 			if (std::abs(index - startOfBitIndex - samplesPerBit) < allowedSampleSkew) {
-				resultBit = 0;
+				resultBit = 1;
 			} else {
-				// consume another 4 full cycles
-				for (int i = 0; i < 4; i++) {
-					index = audio->FindThisOrNextZeroCrossing(index + 1, hysterisis);
-				}
-
-				// if the 8 full cycles happen over a samplesPerBit time span, then we have a 1 bit
-				if (std::abs(index - startOfBitIndex - samplesPerBit) < allowedSampleSkew) {
-					resultBit = 1;
-				} else {
-					// We get here if we're straddling a transition between
-					// two bit values (1200Hz and 2400Hz) - just move ahead
-					// one wave and continue trying to get a clean bit.
-					//
-					// We also get here if the DC offset is such that we don't
-					// see a zero crossing.
-					//
-					// If this happens, an alternative approach would be to re-scan
-					// starting at startingIndex, but count local peaks instead of
-					// zero crossings. This will be slower, but I think would auto
-					// recover some lost bytes.
-					//
-					// Move ahead one wave cycle and try again
-					index = audio->FindThisOrNextZeroCrossing(startingIndex + 1, hysterisis);
-					continue;
-				}
+				// garbage data - let caller figure it out
+				resultBit = 2;
 			}
+		}
 
-			if (index - startingIndex < samplesPerBit / 2) {
-				index = audio->FindThisOrNextZeroCrossing(index + 1, hysterisis);
-				continue;
-			}
+		// notice if we got a short read (this happens with noisy signal
+		// at start of tape)
+		if (index - startingIndex < samplesPerBit / 2) {
+			resultBit = 2;
+		}
 
-			if (debugBit) {
-				std::cout << std::format("{}-{}: {} ({}/{} samples):",
-					startingIndex,
-					index,
-					resultBit, index - startingIndex,
-					samplesPerBit
-					);
-				for (int i=0; i < index - startingIndex; i++) { std::cout << std::format(" {},", audio->Value(startingIndex + i)); }
-				std::cout << std::endl;
-			}
+		// notice if we got a long read (this happens with misaligned reads,
+		// but we let caller sort it out)
+		if (index - startingIndex > samplesPerBit * 2) {
+			resultBit = 2;
+		}
+
+		if (debugBit) {
+			std::cout << std::format("{}-{}: {} ({}/{} samples):",
+				startingIndex,
+				index,
+				resultBit, index - startingIndex,
+				samplesPerBit
+				);
+			for (int i=0; i < index - startingIndex; i++) { std::cout << std::format(" {},", audio->Value(startingIndex + i)); }
+			std::cout << std::endl;
+		}
 
 #if 0
-			std::cout << initialIndex << ", " << audio->TimeOffset(initialIndex) << "s: fullWaveCount = " << fullWaveCount << " lost sync" << std::endl;
+		std::cout << initialIndex << ", " << audio->TimeOffset(initialIndex) << "s: fullWaveCount = " << fullWaveCount << " lost sync" << std::endl;
 #endif
-			return std::make_pair(audio->FindThisOrNextZeroCrossing(index), resultBit);
-		}
-		throw AudioEOF("ran out of data");
+		return std::make_pair(index, resultBit);
 	}
 
     public:
