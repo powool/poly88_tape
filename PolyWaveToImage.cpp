@@ -1767,79 +1767,17 @@ private slots:
 		if (!findRecordByRow(row, fileIdx, recIdx)) return;
 
 		auto &files = tape.GetFiles();
-		auto &recs = files[fileIdx].GetRecords();
+		auto &file = files[fileIdx];
+		auto &recs = file.GetRecords();
 
-		// Get the tape file name from record 0 of this file
-		std::string tapeFileName = recs[0].GetName();
+		std::string tapeFileName = file.GetName();
 		std::string trimmedName = tapeFileName;
 		while (!trimmedName.empty() && trimmedName.back() == ' ')
 			trimmedName.pop_back();
 
-		// --- Gather the contiguous run of records starting from record 0 ---
-		std::vector<Record *> casRecords;
-		for (size_t i = 0; i < recs.size(); i++) {
-			if (recs[i].GetName() == tapeFileName) {
-				casRecords.push_back(&recs[i]);
-			}
-		}
-
 		// --- Validate the record set ---
-		QStringList warnings;
-		bool hasEndRecord = false;
-		int expectedRecNum = 0;
-
-		for (size_t i = 0; i < casRecords.size(); i++) {
-			Record *r = casRecords[i];
-			int recNum = r->GetRecordNumber();
-
-			// Check sequential record numbers starting at 0
-			if (recNum != expectedRecNum) {
-				warnings << QString("Record number %1 found, expected %2")
-					.arg(recNum).arg(expectedRecNum);
-			}
-			expectedRecNum = recNum + 1;
-
-			// Check name consistency
-			if (r->GetName() != tapeFileName) {
-				warnings << QString("Record %1 has name '%2', expected '%3'")
-					.arg(recNum)
-					.arg(QString::fromStdString(r->GetName()).trimmed())
-					.arg(QString::fromStdString(trimmedName));
-			}
-
-			// Check for End record
-			if (r->GetType() == Record::Type::End) {
-				hasEndRecord = true;
-				if (i != casRecords.size() - 1) {
-					warnings << QString("End record at position %1 is not the last record")
-						.arg(static_cast<int>(i));
-				}
-			}
-
-			// Check data length: data/binary records (not last) should be 256
-			auto rtype = r->GetType();
-			bool lengthExempt = (rtype == Record::Type::Comment ||
-				rtype == Record::Type::End ||
-				rtype == Record::Type::AutoExecute);
-			if (!lengthExempt && i < casRecords.size() - 1) {
-				if (r->GetDataLength() != 256) {
-					warnings << QString("Record %1 has length %2, expected 256")
-						.arg(recNum).arg(r->GetDataLength());
-				}
-			}
-
-			// Checksum warnings (soft errors)
-			if (!r->HeaderChecksumIsValid()) {
-				warnings << QString("Record %1 has header checksum error").arg(recNum);
-			}
-			if (!r->DataChecksumIsValid()) {
-				warnings << QString("Record %1 has data checksum error").arg(recNum);
-			}
-		}
-
-		if (!hasEndRecord) {
-			warnings << "No End record found";
-		}
+		std::string validationResult = file.Validate();
+		bool hasEndRecord = validationResult.find("No End record found") == std::string::npos;
 
 		// --- Show validation dialog ---
 		QDialog validationDlg(this);
@@ -1849,9 +1787,9 @@ private slots:
 		vLayout->addWidget(new QLabel(
 			QString("Tape file: <b>%1</b> (%2 records)")
 			.arg(QString::fromStdString(trimmedName))
-			.arg(casRecords.size())));
+			.arg(recs.size())));
 
-		if (warnings.isEmpty()) {
+		if (validationResult.empty()) {
 			vLayout->addWidget(new QLabel("All checks passed."));
 		} else {
 			auto *warnLabel = new QLabel("Warnings:");
@@ -1859,7 +1797,7 @@ private slots:
 			vLayout->addWidget(warnLabel);
 			auto *warnList = new QTextEdit(&validationDlg);
 			warnList->setReadOnly(true);
-			warnList->setPlainText(warnings.join("\n"));
+			warnList->setPlainText(QString::fromStdString(validationResult));
 			warnList->setMaximumHeight(150);
 			vLayout->addWidget(warnList);
 		}
@@ -1906,68 +1844,19 @@ private slots:
 
 		int recordsWritten = 0;
 		int totalDataBytes = 0;
-
-		auto writeRecordBinary = [&](Record *r) {
-			if (exportAsCas) {
-				// Write 16 bytes of 0xe6 leader
-				uint8_t leader = 0xe6;
-				for (int i = 0; i < 16; i++)
-					ofs.write(reinterpret_cast<const char *>(&leader), 1);
-
-				// Write SOH byte (0x01)
-				uint8_t sohByte = 0x01;
-				ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
-
-				// Write 14 header bytes + header checksum
-				auto allBytes = r->GetAllBytes();
-				size_t leaderCount = 0;
-				for (auto *tb : allBytes) {
-					if (tb->fieldType == FieldType::Leader) leaderCount++;
-					else break;
-				}
-				size_t hdrStart = leaderCount + 1; // skip soh
-				for (size_t i = hdrStart; i < hdrStart + 14; i++) {
-					uint8_t b = allBytes[i]->value ? *(allBytes[i]->value) : 0;
-					ofs.write(reinterpret_cast<const char *>(&b), 1);
-				}
-				{
-					uint8_t b = allBytes[hdrStart + 14]->value
-						? *(allBytes[hdrStart + 14]->value) : 0;
-					ofs.write(reinterpret_cast<const char *>(&b), 1);
-				}
-			}
-
-			// Write data bytes
-			auto &dataBytes = r->GetData();
-			int dataLen = static_cast<int>(dataBytes.size());
-			for (int i = 0; i < dataLen; i++) {
-				uint8_t b = dataBytes[i].value ? *(dataBytes[i].value) : 0;
-				ofs.write(reinterpret_cast<const char *>(&b), 1);
-			}
-			totalDataBytes += dataLen;
-
-			if (exportAsCas) {
-				// Write data checksum
-				auto allBytes = r->GetAllBytes();
-				uint8_t b = allBytes.back()->value
-					? *(allBytes.back()->value) : 0;
-				ofs.write(reinterpret_cast<const char *>(&b), 1);
-			}
-
-			recordsWritten++;
-		};
-
 		bool wroteEndRecord = false;
 		int prevRecNum = -1;
-		for (auto *r : casRecords) {
-			int recNum = r->GetRecordNumber();
+
+		for (auto &r : recs) {
+			int recNum = r.GetRecordNumber();
 			if (prevRecNum >= 0 && recNum <= prevRecNum) {
 				// Record number decreased — duplicate copy, stop
 				break;
 			}
-			writeRecordBinary(r);
+			totalDataBytes += r.Write(ofs, exportAsCas);
+			recordsWritten++;
 			prevRecNum = recNum;
-			if (r->GetType() == Record::Type::End) {
+			if (r.GetType() == Record::Type::End) {
 				wroteEndRecord = true;
 				break;
 			}
@@ -1975,48 +1864,10 @@ private slots:
 
 		// Create a synthetic End record if requested (CAS mode only)
 		if (exportAsCas && createEndRecord && !wroteEndRecord) {
-			// Write 16 bytes of 0xe6 leader
-			uint8_t leader = 0xe6;
-			for (int i = 0; i < 16; i++)
-				ofs.write(reinterpret_cast<const char *>(&leader), 1);
-
-			// Write SOH
-			uint8_t sohByte = 0x01;
-			ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
-
-			// Build a 14-byte header + checksum for End record
-			uint8_t endHeader[14] = {};
-			// Copy the tape file name (8 bytes, space-padded)
-			for (int i = 0; i < 8; i++) {
-				endHeader[i] = (i < static_cast<int>(tapeFileName.size()))
-					? static_cast<uint8_t>(tapeFileName[i]) : ' ';
-			}
-			// Record number = next after the last one written
 			uint16_t nextRecNum = 0;
-			if (!casRecords.empty())
-				nextRecNum = casRecords.back()->GetRecordNumber() + 1;
-			endHeader[8] = static_cast<uint8_t>(nextRecNum & 0xff);
-			endHeader[9] = static_cast<uint8_t>((nextRecNum >> 8) & 0xff);
-			// Length = 0
-			endHeader[10] = 0;
-			// Address = 0
-			endHeader[11] = 0;
-			endHeader[12] = 0;
-			// Type = End
-			endHeader[13] = static_cast<uint8_t>(Record::Type::End);
-
-			// Compute header checksum (two's complement so sum of all + checksum = 0)
-			uint8_t hdrSum = 0;
-			for (int i = 0; i < 14; i++) hdrSum += endHeader[i];
-			uint8_t hdrCS = static_cast<uint8_t>(-hdrSum);
-
-			ofs.write(reinterpret_cast<const char *>(endHeader), 14);
-			ofs.write(reinterpret_cast<const char *>(&hdrCS), 1);
-
-			// End records have no data, but write a zero data checksum
-			uint8_t dataCS = 0;
-			ofs.write(reinterpret_cast<const char *>(&dataCS), 1);
-
+			if (!recs.empty())
+				nextRecNum = recs.back().GetRecordNumber() + 1;
+			Record::WriteEndRecord(ofs, tapeFileName, nextRecNum);
 			recordsWritten++;
 		}
 

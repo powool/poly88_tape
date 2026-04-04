@@ -88,7 +88,7 @@ class Record {
 
 	uint16_t GetAddress() const;
 
-	uint16_t GetDataLength();
+	uint16_t GetDataLength() const;
 
 	std::string GetStatusString() const;
 
@@ -139,6 +139,14 @@ class Record {
 
 	// Find which TapeByte (field name) a sample index corresponds to
 	std::string FieldNameAtIndex(TapeIndex idx);
+
+	// Write this record to an output stream.
+	// If writeCasFormat is true, writes leader + SOH + header + checksum wrapper.
+	// Returns the number of data bytes written.
+	int Write(std::ofstream &ofs, bool writeCasFormat) const;
+
+	// Write a synthetic End record to an output stream in CAS format.
+	static void WriteEndRecord(std::ofstream &ofs, const std::string &tapeFileName, uint16_t recordNumber);
 
 	// Read one byte from the decoder into a TapeByte
 	static TapeByte readOneByte(DataInterfacePtr dec, TapeIndex idx, FieldType ft);

@@ -28,7 +28,7 @@ uint16_t Record::GetAddress() const {
 	return 0;
 }
 
-uint16_t Record::GetDataLength() {
+uint16_t Record::GetDataLength() const {
 	if (repairDataLength && !HeaderChecksumIsValid()) {
 		return 256;
 	}
@@ -340,6 +340,91 @@ std::string Record::FieldNameAtIndex(TapeIndex idx) {
 			return fmt(std::format("data[{}]", i), data[i]);
 	if (csData.length > 0 && idx >= csData.startIndex && idx < csData.startIndex + csData.length) return fmt("csData", csData);
 	return "";
+}
+
+int Record::Write(std::ofstream &ofs, bool writeCasFormat) const {
+	if (writeCasFormat) {
+		// Write 16 bytes of 0xe6 leader
+		uint8_t leaderByte = 0xe6;
+		for (int i = 0; i < 16; i++)
+			ofs.write(reinterpret_cast<const char *>(&leaderByte), 1);
+
+		// Write SOH byte
+		uint8_t sohByte = 0x01;
+		ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
+
+		// Write 14 header bytes: name[8] rcdL rcdH ln addrL addrH type
+		auto writeByte = [&](const TapeByte &tb) {
+			uint8_t b = tb.value ? *(tb.value) : 0;
+			ofs.write(reinterpret_cast<const char *>(&b), 1);
+		};
+		for (int i = 0; i < 8; i++) writeByte(name[i]);
+		writeByte(rcdL);
+		writeByte(rcdH);
+		writeByte(ln);
+		writeByte(addrL);
+		writeByte(addrH);
+		writeByte(type);
+
+		// Write header checksum
+		writeByte(csHeader);
+	}
+
+	// Write data bytes
+	int dataLen = static_cast<int>(data.size());
+	for (int i = 0; i < dataLen; i++) {
+		uint8_t b = data[i].value ? *(data[i].value) : 0;
+		ofs.write(reinterpret_cast<const char *>(&b), 1);
+	}
+
+	if (writeCasFormat) {
+		// Write data checksum
+		uint8_t b = csData.value ? *(csData.value) : 0;
+		ofs.write(reinterpret_cast<const char *>(&b), 1);
+	}
+
+	return dataLen;
+}
+
+void Record::WriteEndRecord(std::ofstream &ofs, const std::string &tapeFileName, uint16_t recordNumber) {
+	// Write 16 bytes of 0xe6 leader
+	uint8_t leaderByte = 0xe6;
+	for (int i = 0; i < 16; i++)
+		ofs.write(reinterpret_cast<const char *>(&leaderByte), 1);
+
+	// Write SOH
+	uint8_t sohByte = 0x01;
+	ofs.write(reinterpret_cast<const char *>(&sohByte), 1);
+
+	// Build a 14-byte header for End record
+	uint8_t endHeader[14] = {};
+	// Copy the tape file name (8 bytes, space-padded)
+	for (int i = 0; i < 8; i++) {
+		endHeader[i] = (i < static_cast<int>(tapeFileName.size()))
+			? static_cast<uint8_t>(tapeFileName[i]) : ' ';
+	}
+	// Record number
+	endHeader[8] = static_cast<uint8_t>(recordNumber & 0xff);
+	endHeader[9] = static_cast<uint8_t>((recordNumber >> 8) & 0xff);
+	// Length = 0
+	endHeader[10] = 0;
+	// Address = 0
+	endHeader[11] = 0;
+	endHeader[12] = 0;
+	// Type = End
+	endHeader[13] = static_cast<uint8_t>(Type::End);
+
+	// Compute header checksum (two's complement so sum of all + checksum = 0)
+	uint8_t hdrSum = 0;
+	for (int i = 0; i < 14; i++) hdrSum += endHeader[i];
+	uint8_t hdrCS = static_cast<uint8_t>(-hdrSum);
+
+	ofs.write(reinterpret_cast<const char *>(endHeader), 14);
+	ofs.write(reinterpret_cast<const char *>(&hdrCS), 1);
+
+	// End records have no data, but write a zero data checksum
+	uint8_t dataCS = 0;
+	ofs.write(reinterpret_cast<const char *>(&dataCS), 1);
 }
 
 // Read one byte from the decoder into a TapeByte
