@@ -51,12 +51,14 @@ enum class ScanStatus {
 };
 
 class Record {
-	enum Type {
+	public:
+	enum class Type : uint8_t {
 		AbsoluteBinary = 0x00,
 		Comment = 0x01,
 		End = 0x02,
 		AutoExecute = 0x03,
-		Data = 0x04
+		Data = 0x04,
+		Unknown = 0xff
 	};
 
 	// defined in Poly_88_Operation_Software.pdf page 85
@@ -100,8 +102,7 @@ class Record {
 	// Generate a hex dump of the data bytes, 16 bytes per line with ASCII
 	std::string GetHexDump() const;
 
-	// Return the raw type byte value (or 0xff if unknown)
-	uint8_t GetTypeValue() const;
+	Type GetType() const;
 
 	// Return an ASCII representation of the header as a single line
 	std::string GetHeaderAsAscii() const;

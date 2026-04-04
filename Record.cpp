@@ -11,14 +11,13 @@
 #include "Record.hpp"
 
 std::string Record::GetTypeName() const {
-	if (!type.value) return "?";
-	switch (*(type.value)) {
-		case TapeByte::AbsoluteBinary: return "Binary";
-		case TapeByte::Comment:        return "Comment";
-		case TapeByte::End:            return "End";
-		case TapeByte::AutoExecute:    return "AutoExec";
-		case TapeByte::Data:           return "Data";
-		default:             return "Unknown";
+	switch (GetType()) {
+		case Type::AbsoluteBinary: return "Binary";
+		case Type::Comment:        return "Comment";
+		case Type::End:            return "End";
+		case Type::AutoExecute:    return "AutoExec";
+		case Type::Data:           return "Data";
+		default:                   return "Unknown";
 	}
 }
 
@@ -144,11 +143,19 @@ std::string Record::GetHexDump() const {
 	return result;
 }
 
-// Return the raw type byte value (or 0xff if unknown)
-uint8_t Record::GetTypeValue() const {
-	return type.value ? *(type.value) : 0xff;
+Record::Type Record::GetType() const {
+	if (!type.value) return Type::Unknown;
+	switch (static_cast<Type>(*(type.value))) {
+		case Type::AbsoluteBinary:
+		case Type::Comment:
+		case Type::End:
+		case Type::AutoExecute:
+		case Type::Data:
+			return static_cast<Type>(*(type.value));
+		default:
+			return Type::Unknown;
+	}
 }
-
 
 // Return an ASCII representation of the header as a single line
 std::string Record::GetHeaderAsAscii() const {
@@ -174,14 +181,12 @@ std::string Record::GetHeaderAsAscii() const {
 		n, rn, typeName, address, length);
 }
 
-// Check if record type has data content (Binary, Data, End, or Comment)
+// Check if record type has data content (Binary, Data, or Comment)
 bool Record::HasDataContent() const {
-	if (!type.value) return false;
-	switch (*(type.value)) {
-		case TapeByte::AbsoluteBinary:
-		case TapeByte::Data:
-		case TapeByte::End:
-		case TapeByte::Comment:
+	switch (GetType()) {
+		case Type::AbsoluteBinary:
+		case Type::Data:
+		case Type::Comment:
 			return true;
 		default:
 			return false;
@@ -226,14 +231,14 @@ bool Record::RecordIsValid() {
 	if (!HeaderChecksumIsValid()) {
 		return false;
 	}
-	if (!type.value) return false;
-	switch(*(type.value)) {
-		case TapeByte::AbsoluteBinary:
-		case TapeByte::Data:
+	if (GetType() == Type::Unknown) return false;
+	switch(GetType()) {
+		case Type::AbsoluteBinary:
+		case Type::Data:
 			return DataChecksumIsValid();
-		case TapeByte::Comment:
-		case TapeByte::End:
-		case TapeByte::AutoExecute:
+		case Type::Comment:
+		case Type::End:
+		case Type::AutoExecute:
 			return true;
 		default:
 			return false;

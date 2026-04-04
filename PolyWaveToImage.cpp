@@ -1808,7 +1808,7 @@ private slots:
 			}
 
 			// Check for End record
-			if (r->GetTypeValue() == 0x02) {
+			if (r->GetType() == Record::Type::End) {
 				hasEndRecord = true;
 				if (i != casRecords.size() - 1) {
 					warnings << QString("End record at position %1 is not the last record")
@@ -1817,8 +1817,10 @@ private slots:
 			}
 
 			// Check data length: data/binary records (not last) should be 256
-			uint8_t rtype = r->GetTypeValue();
-			bool lengthExempt = (rtype == 0x01 || rtype == 0x02 || rtype == 0x03);
+			auto rtype = r->GetType();
+			bool lengthExempt = (rtype == Record::Type::Comment ||
+				rtype == Record::Type::End ||
+				rtype == Record::Type::AutoExecute);
 			if (!lengthExempt && i < casRecords.size() - 1) {
 				if (r->GetDataLength() != 256) {
 					warnings << QString("Record %1 has length %2, expected 256")
@@ -1965,7 +1967,7 @@ private slots:
 			}
 			writeRecordBinary(r);
 			prevRecNum = recNum;
-			if (r->GetTypeValue() == 0x02) {
+			if (r->GetType() == Record::Type::End) {
 				wroteEndRecord = true;
 				break;
 			}
@@ -2000,8 +2002,8 @@ private slots:
 			// Address = 0
 			endHeader[11] = 0;
 			endHeader[12] = 0;
-			// Type = End (0x02)
-			endHeader[13] = 0x02;
+			// Type = End
+			endHeader[13] = static_cast<uint8_t>(Record::Type::End);
 
 			// Compute header checksum (two's complement so sum of all + checksum = 0)
 			uint8_t hdrSum = 0;
