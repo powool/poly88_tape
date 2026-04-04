@@ -5,10 +5,137 @@
 #include <format>
 #include <fstream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "Record.hpp"
+
+static TapeByte makeTapeByte(uint8_t val, FieldType ft) {
+	TapeByte tb;
+	tb.value = val;
+	tb.fieldType = ft;
+	return tb;
+}
+
+static uint8_t readByte(std::ifstream &ifs, const char *context) {
+	uint8_t b;
+	if (!ifs.read(reinterpret_cast<char *>(&b), 1))
+		throw std::runtime_error(std::format("Unexpected end of file reading {}", context));
+	return b;
+}
+
+Record::Record(std::ifstream &ifs) {
+	// Skip leader bytes (0xe6)
+	uint8_t b;
+	bool foundLeader = false;
+	while (ifs.read(reinterpret_cast<char *>(&b), 1)) {
+		if (b == 0xe6) {
+			foundLeader = true;
+			TapeByte lb;
+			lb.value = 0xe6;
+			lb.fieldType = FieldType::Leader;
+			leader.push_back(lb);
+			continue;
+		}
+		if (b == 0x01) {
+			// SOH found
+			soh = makeTapeByte(0x01, FieldType::SOH);
+			break;
+		}
+		throw std::runtime_error(
+			std::format("Expected leader (0xe6) or SOH (0x01), got 0x{:02x}", b));
+	}
+
+	if (!soh.value || *(soh.value) != 0x01) {
+		if (ifs.eof() && !foundLeader)
+			throw std::runtime_error("End of file before any record data");
+		throw std::runtime_error("SOH byte not found");
+	}
+
+	// Read 8 name bytes
+	for (int i = 0; i < 8; i++)
+		name[i] = makeTapeByte(readByte(ifs, "name"), FieldType::Name);
+
+	// Read header fields: rcdL, rcdH, ln, addrL, addrH, type
+	rcdL = makeTapeByte(readByte(ifs, "rcdL"), FieldType::HeaderField);
+	rcdH = makeTapeByte(readByte(ifs, "rcdH"), FieldType::HeaderField);
+	ln = makeTapeByte(readByte(ifs, "ln"), FieldType::HeaderField);
+	addrL = makeTapeByte(readByte(ifs, "addrL"), FieldType::HeaderField);
+	addrH = makeTapeByte(readByte(ifs, "addrH"), FieldType::HeaderField);
+	type = makeTapeByte(readByte(ifs, "type"), FieldType::HeaderField);
+
+	// Read header checksum
+	csHeader = makeTapeByte(readByte(ifs, "header checksum"), FieldType::HeaderChecksum);
+
+	// Read data bytes (length from header)
+	uint16_t dataLength = *(ln.value) == 0 ? 256 : *(ln.value);
+	data.resize(dataLength);
+	for (uint16_t i = 0; i < dataLength; i++)
+		data[i] = makeTapeByte(readByte(ifs, "data"), FieldType::Data);
+
+	// Read data checksum
+	csData = makeTapeByte(readByte(ifs, "data checksum"), FieldType::DataChecksum);
+
+	// Set scan status based on checksum validity
+	if (!HeaderChecksumIsValid())
+		scanStatus = ScanStatus::HeaderChecksumFail;
+	else if (!DataChecksumIsValid())
+		scanStatus = ScanStatus::DataChecksumFail;
+	else
+		scanStatus = ScanStatus::Ok;
+}
+
+std::string Record::Compare(const Record &other) const {
+	std::string diffs;
+
+	// Compare name
+	if (GetName() != other.GetName())
+		diffs += std::format("Name: '{}' vs '{}'\n", GetName(), other.GetName());
+
+	// Compare record number
+	if (GetRecordNumber() != other.GetRecordNumber())
+		diffs += std::format("Record#: {} vs {}\n", GetRecordNumber(), other.GetRecordNumber());
+
+	// Compare type
+	if (GetType() != other.GetType())
+		diffs += std::format("Type: {} vs {}\n", GetTypeName(), other.GetTypeName());
+
+	// Compare address
+	if (GetAddress() != other.GetAddress())
+		diffs += std::format("Address: {:04x} vs {:04x}\n", GetAddress(), other.GetAddress());
+
+	// Compare data length
+	if (data.size() != other.data.size())
+		diffs += std::format("Data length: {} vs {}\n", data.size(), other.data.size());
+
+	// Compare header checksum validity
+	if (HeaderChecksumIsValid() != other.HeaderChecksumIsValid())
+		diffs += std::format("Header checksum: {} vs {}\n",
+			HeaderChecksumIsValid() ? "valid" : "INVALID",
+			other.HeaderChecksumIsValid() ? "valid" : "INVALID");
+
+	// Compare data checksum validity
+	if (DataChecksumIsValid() != other.DataChecksumIsValid())
+		diffs += std::format("Data checksum: {} vs {}\n",
+			DataChecksumIsValid() ? "valid" : "INVALID",
+			other.DataChecksumIsValid() ? "valid" : "INVALID");
+
+	// Compare data bytes
+	size_t minLen = std::min(data.size(), other.data.size());
+	int diffCount = 0;
+	for (size_t i = 0; i < minLen; i++) {
+		uint8_t a = data[i].value ? *(data[i].value) : 0;
+		uint8_t b = other.data[i].value ? *(other.data[i].value) : 0;
+		if (a != b) diffCount++;
+	}
+	diffCount += static_cast<int>(std::abs(
+		static_cast<int>(data.size()) - static_cast<int>(other.data.size())));
+	if (diffCount > 0)
+		diffs += std::format("Data bytes differ: {} byte(s)\n", diffCount);
+
+	return diffs;
+}
 
 std::string Record::GetTypeName() const {
 	switch (GetType()) {
@@ -292,6 +419,26 @@ bool Record::DataChecksumIsValid() const {
 		sum += *(data[i].value);
 	sum += *(csData.value);
 	return sum == 0;
+}
+
+void Record::FixHeaderChecksum() {
+	uint8_t sum = 0;
+	for (int i = 0; i < 8; i++)
+		if (name[i].value) sum += *(name[i].value);
+	if (rcdL.value) sum += *(rcdL.value);
+	if (rcdH.value) sum += *(rcdH.value);
+	if (ln.value) sum += *(ln.value);
+	if (addrL.value) sum += *(addrL.value);
+	if (addrH.value) sum += *(addrH.value);
+	if (type.value) sum += *(type.value);
+	csHeader.value = static_cast<uint8_t>(-sum);
+}
+
+void Record::FixDataChecksum() {
+	uint8_t sum = 0;
+	for (size_t i = 0; i < data.size(); i++)
+		if (data[i].value) sum += *(data[i].value);
+	csData.value = static_cast<uint8_t>(-sum);
 }
 
 // Return all TapeBytes in order for tick-mark rendering

@@ -43,6 +43,12 @@ qt_add_executable(${PROJECT_NAME}
 # target_link_libraries(poly88_tape PRIVATE Qt6::Widgets Qt6::Gui cpptrace::cpptrace)
 target_link_libraries(${PROJECT_NAME} PRIVATE Qt6::Widgets Qt6::Gui)
 
+add_executable(mergecas mergecas.cpp Record.cpp)
+target_include_directories(mergecas PRIVATE .)
+
+add_executable(dumpcas dumpcas.cpp Record.cpp)
+target_include_directories(dumpcas PRIVATE .)
+
 enable_testing()
 
 add_executable(testing tests/empty.cpp tests/test_audio.cpp tests/test_polyphase.cpp audio.cpp)

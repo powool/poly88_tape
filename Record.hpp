@@ -7,6 +7,7 @@
 #include <format>
 #include <fstream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -131,6 +132,12 @@ class Record {
 
 	bool DataChecksumIsValid() const;
 
+	// Recompute and fix the header checksum byte
+	void FixHeaderChecksum();
+
+	// Recompute and fix the data checksum byte
+	void FixDataChecksum();
+
 	// Return all TapeBytes in order for tick-mark rendering
 	std::vector<const TapeByte *> GetAllBytes() const;
 
@@ -139,6 +146,16 @@ class Record {
 
 	// Find which TapeByte (field name) a sample index corresponds to
 	std::string FieldNameAtIndex(TapeIndex idx);
+
+	Record() = default;
+
+	// Construct a Record by reading one CAS-format record from an input stream.
+	// Throws std::runtime_error on failure.
+	explicit Record(std::ifstream &ifs);
+
+	// Compare this record to another. Returns empty string if identical,
+	// otherwise a description of the differences.
+	std::string Compare(const Record &other) const;
 
 	// Write this record to an output stream.
 	// If writeCasFormat is true, writes leader + SOH + header + checksum wrapper.

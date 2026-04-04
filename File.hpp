@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cstdint>
 #include <format>
+#include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -130,6 +132,66 @@ class File {
 
 		records.push_back(std::move(record));
 		return true;
+	}
+
+	// Read all records from a CAS file. Returns true on success.
+	bool ReadCas(const std::string &fileName) {
+		std::ifstream ifs(fileName, std::ios::binary);
+		if (!ifs) return false;
+
+		records.clear();
+		try {
+			while (ifs.peek() != EOF) {
+				records.emplace_back(ifs);
+			}
+		} catch (const std::runtime_error &) {
+			return false;
+		}
+		return !records.empty();
+	}
+
+	// Merge records from otherFile into *this.
+	// For each record in *this that has checksum errors, compare it
+	// with the corresponding record in otherFile and call acceptOrReject
+	// with a description of differences. If accepted, replace the record.
+	// Returns a summary of actions taken.
+	std::string Merge(const File &otherFile,
+		std::function<bool(const std::string &prompt)> acceptOrReject)
+	{
+		std::string summary;
+		const auto &otherRecs = otherFile.GetRecords();
+
+		for (size_t i = 0; i < records.size(); i++) {
+			bool hdrBad = !records[i].HeaderChecksumIsValid();
+			bool dataBad = !records[i].DataChecksumIsValid();
+			if (!hdrBad && !dataBad) continue;
+
+			if (i >= otherRecs.size()) {
+				summary += std::format("Record {}: bad but no corresponding record in other file\n",
+					records[i].GetRecordNumber());
+				continue;
+			}
+
+			std::string diffs = records[i].Compare(otherRecs[i]);
+			if (diffs.empty()) continue;
+
+			std::string prompt = std::format(
+				"Record {} ({}):\n{}Replace with other file's copy?",
+				records[i].GetRecordNumber(),
+				records[i].GetStatusString(),
+				diffs);
+
+			if (acceptOrReject(prompt)) {
+				records[i] = otherRecs[i];
+				summary += std::format("Record {}: replaced\n",
+					records[i].GetRecordNumber());
+			} else {
+				summary += std::format("Record {}: kept original\n",
+					records[i].GetRecordNumber());
+			}
+		}
+
+		return summary;
 	}
 
 	bool RemoveRecord(TapeIndex idx, bool removeAfter) {
