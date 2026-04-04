@@ -29,14 +29,6 @@ enum class FieldType {
 };
 
 struct TapeByte {
-	enum TapeType {
-		AbsoluteBinary = 0x00,
-		Comment = 0x01,
-		End = 0x02,
-		AutoExecute = 0x03,
-		Data = 0x04
-	};
-
 	// WAV file index and length, in units of samples.
 	TapeIndex startIndex = 0, length = 0;
 	// no value means exactly that - it is unknown
@@ -59,6 +51,14 @@ enum class ScanStatus {
 };
 
 class Record {
+	enum Type {
+		AbsoluteBinary = 0x00,
+		Comment = 0x01,
+		End = 0x02,
+		AutoExecute = 0x03,
+		Data = 0x04
+	};
+
 	// defined in Poly_88_Operation_Software.pdf page 85
 	std::vector<TapeByte> leader;
 	TapeByte soh;
