@@ -23,6 +23,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -747,10 +748,27 @@ private slots:
 
 		QMenu contextMenu(this);
 
+		QAction *jumpToIndexAction = contextMenu.addAction("Jump to Index...");
+		contextMenu.addSeparator();
 		QAction *scanForRecordAction = contextMenu.addAction("Scan For Record");
 		QAction *scanAllFromHereAction = contextMenu.addAction("Scan All From Here");
 		QAction *getBitrateEstimate = contextMenu.addAction("Get Bitrate Estimate");
 
+		connect(jumpToIndexAction, &QAction::triggered, this,
+			[this, idx]() {
+				bool ok;
+				double target = QInputDialog::getDouble(this,
+					"Jump to Index",
+					"TapeIndex:",
+					idx,              // default value
+					0,                // min
+					1e12,             // max
+					0,                // decimals
+					&ok);
+				if (ok) {
+					setScrollOffset(target - visibleSamples() / 2.0);
+				}
+			});
 		connect(scanForRecordAction, &QAction::triggered, this,
 			[this, idx]() { ScanForRecord(idx); });
 		connect(scanAllFromHereAction, &QAction::triggered, this,
@@ -1094,6 +1112,8 @@ private:
 	QScrollBar *hScrollBar = nullptr;
 	QPushButton *scrollLeftBtn = nullptr;
 	QPushButton *scrollRightBtn = nullptr;
+	// Mouse position row
+	QLabel *mousePositionLabel = nullptr;
 	// Selected Waveform row
 	QLabel *selWaveIndexLabel = nullptr;
 	QLabel *selWaveWidthLabel = nullptr;
@@ -1261,11 +1281,25 @@ private:
 		connect(waveformView, &WaveformView::findRepeatRequested,
 			this, [this](int dir) { performSearch(dir); });
 
-		// --- Middle pane: two rows of status labels ---
+		// --- Middle pane: status label rows ---
 		auto *middleWidget = new QWidget(splitter);
 		auto *middleVLayout = new QVBoxLayout(middleWidget);
 		middleVLayout->setContentsMargins(0, 0, 0, 0);
 		middleVLayout->setSpacing(0);
+
+		// Row 0: Mouse Position
+		auto *mousePosRow = new QHBoxLayout();
+		mousePosRow->setContentsMargins(8, 2, 8, 2);
+
+		auto *mousePosTitleLabel = new QLabel("Position", middleWidget);
+		mousePosTitleLabel->setStyleSheet("font-weight: bold; color: #cccc88;");
+		mousePosRow->addWidget(mousePosTitleLabel);
+		mousePosRow->addSpacing(16);
+
+		mousePositionLabel = new QLabel("\u2014", middleWidget);
+		mousePosRow->addWidget(mousePositionLabel);
+		mousePosRow->addStretch();
+		middleVLayout->addLayout(mousePosRow);
 
 		// Row 1: Selected Waveform
 		auto *selWaveRow = new QHBoxLayout();
@@ -1319,7 +1353,7 @@ private:
 		selRecRow->addStretch();
 		middleVLayout->addLayout(selRecRow);
 
-		middleWidget->setMaximumHeight(60);
+		middleWidget->setMaximumHeight(80);
 
 		// --- Bottom pane: record table + hex detail ---
 		auto *bottomWidget = new QWidget(splitter);
@@ -1457,6 +1491,10 @@ private slots:
 	}
 
 	void onMouseSampleChanged(double sampleIndex) {
+		// Always update the position label
+		mousePositionLabel->setText(QString::number(
+			static_cast<qint64>(sampleIndex)));
+
 		if (!audioPtr || sampleIndex < 0 ||
 			sampleIndex >= audioPtr->SampleCount()) {
 			tapeFileLabel->setText("—");
