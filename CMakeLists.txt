@@ -51,7 +51,7 @@ target_include_directories(dumpcas PRIVATE .)
 
 enable_testing()
 
-add_executable(testing tests/empty.cpp tests/test_audio.cpp tests/test_polyphase.cpp audio.cpp)
+add_executable(testing tests/empty.cpp tests/test_audio.cpp tests/test_polyphase.cpp tests/test_kansascity.cpp audio.cpp Record.cpp)
 
 target_include_directories(testing PRIVATE .)
 
