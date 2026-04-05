@@ -3,8 +3,12 @@
 #include "audio.h"
 #include "DataInterfaceBase.hpp"
 
+// In this format, an E6 looks like this:
+//
+// 0 0110 0111 1 1
+//
+
 class KansasCity : public DataInterfaceBase {
-	TapeIndex rewindIndex;
     public:
 	// Decode 300 baud byte format data, which is a two tone encoding (AKA
 	// frequency shift key - FSK), where 1200HZ represents a 0, and 2400HZ
@@ -15,7 +19,7 @@ class KansasCity : public DataInterfaceBase {
 	// Attempt to count accurately by measuring wavelength between
 	// each full wave.
 	std::pair<TapeIndex, int> ReadBit(TapeIndex index) {
-		TapeIndex allowedSampleSkew = .1 * samplesPerBit;
+		TapeIndex allowedSampleSkew = .12 * samplesPerBit;
 
 		// ensure we are at a zero crossing
 		index = audio->FindThisOrNextZeroCrossing(index, hysterisis);
@@ -90,147 +94,84 @@ class KansasCity : public DataInterfaceBase {
 	std::pair<TapeIndex, uint8_t> ReadByte(TapeIndex index) {
 		TapeIndex byteStartIndex;
 
-		while (index < audio->SampleCount() - samplesPerBit * 12) {
+		TapeIndex ourIndex = index;
+		std::pair<int, TapeIndex> bit;
 
-			TapeIndex ourIndex = index;
-			std::pair<int, TapeIndex> bit;
+		byteStartIndex = index;
 
-			byteStartIndex = index;
+		// check start bit (expect 0)
+		bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
 
-			// check start bit (expect 0)
+		uint8_t resultByte = 0;
+		// in theory, we have a stop bit, now get 8 data bits
+		for(auto bitIndex = 0; bitIndex < 8; bitIndex++) {
 			bit = ReadBit(ourIndex);
 			ourIndex = bit.first;
 
-			if (bit.second != 0) {
-				// Skip to the next full bit (should be
-				// approximately samplesPerBit ahead).
-				index = bit.first;
-				continue;
+			if(bit.second == 1) {
+				resultByte |= 1 << bitIndex;
 			}
-
-			// When we need to resync on a new bit boundary to
-			// retry reading a byte, we'll rewind to this position
-			// after the supposed stop bit we just read.
-			rewindIndex = bit.first;
-
-			uint8_t resultByte = 0;
-			bool resync = false;
-			// in theory, we have a stop bit, now get 8 data bits
-			for(auto bitIndex = 0; bitIndex < 8; bitIndex++) {
-				bit = ReadBit(ourIndex);
-				ourIndex = bit.first;
-
-				if(bit.second == 1) {
-					resultByte |= 1 << bitIndex;
-				}
-
-#if 0
-				if (bit.first - index > 2 * samplesPerBit) {
-					resync = true;
-					break;
-				}
-#endif
-			}
-
-			if (resync) {
-				// I'm not sure where we should go back to
-				if (debugByte) {
-					std::cout << std::format("{}: byte resync to index {}", index, bit.first) << std::endl;
-				}
-				index = bit.first;
-				continue;
-			}
-
-			// check first stop bit (expect 1)
-			bit = ReadBit(ourIndex);
-			ourIndex = bit.first;
-
-			if (bit.second != 1) {
-				index = rewindIndex;
-				continue;
-			}
-
-			// check second stop bit (expect 1)
-			bit = ReadBit(ourIndex);
-			ourIndex = bit.first;
-
-			if (bit.second != 1) {
-				index = rewindIndex;
-				continue;
-			}
-
-			return std::make_pair(ourIndex, resultByte);
 		}
-		return std::make_pair(index, 0);
+
+		// check first stop bit (expect 1)
+		bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
+
+		// check second stop bit (expect 1)
+		bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
+
+		return std::make_pair(ourIndex, resultByte);
 	}
 
 	BitReadResult ReadByteWithBits(TapeIndex index) override {
 		BitReadResult result;
 		result.startIndex = index;
 
-		while (index < audio->SampleCount() - samplesPerBit * 12) {
-			TapeIndex ourIndex = index;
+		TapeIndex ourIndex = index;
 
-			// Start bit (expect 0)
-			TapeIndex bitStart = ourIndex;
-			auto bit = ReadBit(ourIndex);
-			ourIndex = bit.first;
+		// Start bit (expect 0)
+		TapeIndex bitStart = ourIndex;
+		auto bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
 
-			if (bit.second != 0) {
-				index = bit.first;
-				continue;
-			}
+		result.bits.clear();
+		result.startIndex = bitStart;
+		result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
 
-			result.bits.clear();
-			result.startIndex = bitStart;
-			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
-			rewindIndex = bit.first;
-
-			uint8_t resultByte = 0;
-			bool resync = false;
-			// 8 data bits
-			for (auto bitIndex = 0; bitIndex < 8; bitIndex++) {
-				bitStart = ourIndex;
-				bit = ReadBit(ourIndex);
-				ourIndex = bit.first;
-				if (bit.second == 1) {
-					resultByte |= 1 << bitIndex;
-				}
-				result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
-			}
-
-			if (resync) {
-				index = bit.first;
-				continue;
-			}
-
-			// First stop bit (expect 1)
+		uint8_t resultByte = 0;
+		// 8 data bits
+		for (auto bitIndex = 0; bitIndex < 8; bitIndex++) {
 			bitStart = ourIndex;
 			bit = ReadBit(ourIndex);
 			ourIndex = bit.first;
-			if (bit.second != 1) {
-				index = rewindIndex;
-				continue;
+			if (bit.second == 1) {
+				resultByte |= 1 << bitIndex;
 			}
 			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
-
-			// Second stop bit (expect 1)
-			bitStart = ourIndex;
-			bit = ReadBit(ourIndex);
-			ourIndex = bit.first;
-			if (bit.second != 1) {
-				index = rewindIndex;
-				continue;
-			}
-			result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
-
-			result.endIndex = ourIndex;
-			result.value = resultByte;
-			return result;
 		}
 
-		result.endIndex = index;
-		result.value = 0;
+		// First stop bit - although we expect 1 here,
+		// 2 (no bit found) can be returned. We don't fix
+		// sync problems here, we let our caller do that for us.
+		// The caller can see if any of the bit values are 2 if
+		// it care, but more likely, it will simply advance a
+		// few waveforms and retry.
+
+		bitStart = ourIndex;
+		bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
+		result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+
+		// Second stop bit (expect 1)
+		bitStart = ourIndex;
+		bit = ReadBit(ourIndex);
+		ourIndex = bit.first;
+		result.bits.push_back({ bitStart, bit.first, static_cast<uint8_t>(bit.second) });
+
+		result.endIndex = ourIndex;
+		result.value = resultByte;
 		return result;
 	}
 
