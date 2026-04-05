@@ -55,7 +55,9 @@ class DataInterface {
 	// Default implementation wraps ReadByteDetailed with no bit info.
 	virtual BitReadResult ReadByteWithBits(TapeIndex index) = 0;
 
-	virtual TapeIndex Rewind() = 0;
+	// Called when we don't find a leader byte (0xE6).
+	// Differs slightly for the two decoders.
+	virtual TapeIndex SyncAdvance(TapeIndex tapeIndex, int direction) = 0;
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.
 	virtual void TweakSettings()  = 0;

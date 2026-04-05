@@ -162,14 +162,20 @@ class PolyPhase : public DataInterfaceBase {
 		return result;
 	}
 
-	TapeIndex Rewind() {
+	TapeIndex SyncAdvance(TapeIndex tapeIndex, int direction) {
 		adaptiveBitCount = 0;
 		adaptiveBitStart = 0;
 		adaptiveSamplesPerBit = samplesPerBit;
 
 		lastBit = 0;
 		syncIfPossible = false;
-		return rewindIndex;
+
+		// move half a wave
+		if (direction > 0) {
+			return audio->FindThisOrNextTransition(tapeIndex + 1, hysterisis);
+		} else {
+			return audio->FindThisOrPreviousTransition(tapeIndex - 1, hysterisis);
+		}
 	}
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.

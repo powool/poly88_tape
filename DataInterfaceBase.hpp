@@ -56,10 +56,10 @@ class DataInterfaceBase : public DataInterface {
 				// (i.e. the SOH byte start), readResult.first is the next read position
 				return result;
 			}
-			// we didn't find it, so skip to next zero
-			// crossing (either direction)
-			tapeIndex = audio->FindThisOrNextTransition(tapeIndex + 1, hysterisis);
-			Rewind(); // resets last bit we saw to '0'
+			// we didn't find it, so skip to next
+			// appropriate waveform (half wave for polyphase,
+			// full wave for kansas city).
+			tapeIndex = SyncAdvance(tapeIndex, 1 /* forwards */);
 		};
 		throw AudioEOF("ran out of data");
 	}

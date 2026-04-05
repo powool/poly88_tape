@@ -225,10 +225,11 @@ public:
 		if (!dataInterface) return;
 		selection = WaveformSelection();
 		try {
+			// XXX not sure if this is right
 			if (rewind) {
 				// reset "last bit" to zero (required if
 				// we randomly changed startindex).
-				dataInterface->Rewind();
+				startIdx = dataInterface->SyncAdvance(startIdx, 1);
 			}
 			selection.byte1 = dataInterface->ReadByteWithBits(startIdx);
 			selection.byte2 = dataInterface->ReadByteWithBits(selection.byte1.endIndex);
@@ -2167,13 +2168,9 @@ private slots:
 			}
 
 			try {
-				if (direction > 0) {
-					idx += audioPtr->SamplesPerBit(settings.bitrate) / 8.0;
-				} else {
-					if (idx < 1) break;
-					idx -= audioPtr->SamplesPerBit(settings.bitrate) / 8.0;
-				}
-				dataInterface->Rewind();
+				idx = dataInterface->SyncAdvance(idx, direction);
+
+				if (idx <= 0) break;
 			} catch (...) {
 				break;
 			}

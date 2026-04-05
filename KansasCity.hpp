@@ -175,16 +175,14 @@ class KansasCity : public DataInterfaceBase {
 		return result;
 	}
 
-	TapeIndex Rewind() {
-		// This returns the zero crossing at the end of what
-		// we thought was the stop bit.
-		//
-		// This is exposed to the callers because higher than
-		// byte level syncronization occurs. That is, we could
-		// be reading bytes, but not getting 0xe6 record
-		// leader bytes. When that happens, we need a place to
-		// retry from.
-		return rewindIndex;
+	TapeIndex SyncAdvance(TapeIndex tapeIndex, int direction) {
+		// Byte and Polyphase differ slightly - here we
+		// move a full wave forwards or backwards.
+		if (direction > 0) {
+			return audio->FindThisOrNextZeroCrossing(tapeIndex + 1, hysterisis);
+		} else {
+			return audio->FindThisOrPreviousZeroCrossing(tapeIndex + 1, hysterisis);
+		}
 	}
 
 	// Allow adjusting of bitrate, hysterisis values, and so on.
